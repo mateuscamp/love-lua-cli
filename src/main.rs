@@ -115,6 +115,75 @@ fn tela() -> Result<(), String> {
     )
 }
 
+/// A saída do `git` rodado em `pasta`, ou `None` se ele não rodou ou falhou. Sem os locks
+/// opcionais: o `status` não reescreve o índice de uma pasta onde alguém pode estar trabalhando.
+fn git(pasta: &Path, argumentos: &[&str]) -> Option<String> {
+    let saida = Command::new("git")
+        .arg("-C")
+        .arg(pasta)
+        .arg("--no-optional-locks")
+        .args(argumentos)
+        .output()
+        .ok()?;
+    if !saida.status.success() {
+        return None;
+    }
+    String::from_utf8(saida.stdout).ok()
+}
+
+/// O que a pasta do jogo tem fora do ramo principal (o do `origin/HEAD`, ou `main`): a branch, se
+/// não for a principal, e as mudanças sem commit. O lançador abre o jogo como ele está na pasta;
+/// quando alguém trabalha nela, é essa obra que abre, não o principal. `None` com a pasta limpa no
+/// principal, ou quando o git não responde.
+fn obra(pasta: &Path) -> Option<String> {
+    let estado = git(pasta, &["status", "--porcelain=v2", "--branch"])?;
+    let origem = git(
+        pasta,
+        &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"],
+    );
+    let principal = origem
+        .as_deref()
+        .and_then(|ramo| ramo.trim().strip_prefix("origin/"))
+        .unwrap_or("main");
+    let (mut ramo, mut commit, mut mudancas) = (None, "", 0);
+    for linha in estado.lines() {
+        if let Some(valor) = linha.strip_prefix("# branch.head ") {
+            ramo = Some(valor);
+        } else if let Some(valor) = linha.strip_prefix("# branch.oid ") {
+            commit = valor;
+        } else if !linha.starts_with('#') {
+            mudancas += 1;
+        }
+    }
+    let mut partes = Vec::new();
+    match ramo {
+        Some("(detached)") => partes.push(format!(
+            "HEAD solto em {}",
+            commit.get(..7).unwrap_or(commit)
+        )),
+        Some(ramo) if ramo != principal => partes.push(format!("branch {ramo}")),
+        _ => {}
+    }
+    match mudancas {
+        0 => {}
+        1 => partes.push("1 mudança sem commit".to_string()),
+        n => partes.push(format!("{n} mudanças sem commit")),
+    }
+    (!partes.is_empty()).then(|| partes.join(", "))
+}
+
+/// Os itens do menu: o nome de cada jogo e, se a pasta dele está em obra, o que há nela.
+fn itens(raiz: &Path) -> Vec<String> {
+    let largura = JOGOS.iter().map(|jogo| jogo.nome.len()).max().unwrap_or(0);
+    JOGOS
+        .iter()
+        .map(|jogo| match obra(&raiz.join(jogo.pasta)) {
+            Some(obra) => format!("{:largura$}  em obra: {obra}", jogo.nome),
+            None => jogo.nome.to_string(),
+        })
+        .collect()
+}
+
 /// Abre o jogo e espera ele fechar. Devolve o código de saída do lançador (128 + sinal, se ele
 /// morreu por sinal), ou o erro de antes de ele abrir.
 fn abre(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Result<u8, String> {
@@ -140,7 +209,8 @@ fn abre(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Result<u8, String> {
 }
 
 /// O menu: setas escolhem, Enter abre, Esc ou q sai. Quando o jogo fecha, o menu volta no mesmo
-/// jogo. Sem tela X, a pergunta vira o aviso e o Enter não abre nada.
+/// jogo. Sem tela X, a pergunta vira o aviso e o Enter não abre nada. O jogo com a pasta em obra
+/// sai marcado, mas abre igual.
 fn menu(raiz: &Path) -> ExitCode {
     // O Select esconde o cursor enquanto desenha, e o Ctrl+C mata o processo antes de ele
     // devolver: sem isto o terminal fica sem cursor.
@@ -148,17 +218,17 @@ fn menu(raiz: &Path) -> ExitCode {
         let _ = Term::stderr().show_cursor();
         process::exit(130);
     });
-    let nomes: Vec<&str> = JOGOS.iter().map(|jogo| jogo.nome).collect();
     let mut escolhido = 0;
     loop {
         let tela = tela();
+        let itens = itens(raiz);
         let pergunta = match &tela {
             Ok(()) => "Qual jogo? (Enter abre, Esc sai)".to_string(),
             Err(aviso) => format!("{aviso}; nenhum jogo abre (Esc sai)"),
         };
         let escolha = Select::with_theme(&ColorfulTheme::default())
             .with_prompt(pergunta)
-            .items(&nomes)
+            .items(&itens)
             .default(escolhido)
             .interact_opt();
         match escolha {
@@ -298,5 +368,83 @@ mod testes {
         );
 
         std::fs::remove_dir_all(&sockets).unwrap();
+    }
+
+    /// Roda o git em `pasta` sem a configuração do usuário (assinatura, hooks), para o teste
+    /// não depender dela.
+    fn git_teste(pasta: &Path, argumentos: &[&str]) {
+        let certo = Command::new("git")
+            .arg("-C")
+            .arg(pasta)
+            .args(["-c", "user.name=teste", "-c", "user.email=teste@jogar"])
+            .args(argumentos)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap()
+            .success();
+        assert!(certo, "git {argumentos:?}");
+    }
+
+    /// Uma pasta vazia e só deste teste.
+    fn pasta_de_teste(nome: &str) -> PathBuf {
+        let pasta = env::temp_dir().join(format!("jogar-{nome}-{}", process::id()));
+        let _ = std::fs::remove_dir_all(&pasta);
+        std::fs::create_dir_all(&pasta).unwrap();
+        pasta
+    }
+
+    #[test]
+    fn obra_marca_branch_fora_do_principal_e_mudancas_sem_commit() {
+        let raiz = pasta_de_teste("obra");
+        let jogo = raiz.join("jogo");
+        std::fs::create_dir(&jogo).unwrap();
+        assert_eq!(obra(&jogo), None, "pasta sem git");
+
+        git_teste(&jogo, &["init", "-q", "-b", "main"]);
+        std::fs::write(jogo.join("main.lua"), "-- jogo\n").unwrap();
+        git_teste(&jogo, &["add", "."]);
+        git_teste(&jogo, &["commit", "-q", "-m", "um"]);
+        assert_eq!(obra(&jogo), None, "limpa no main");
+
+        std::fs::write(jogo.join("main.lua"), "-- jogo mudado\n").unwrap();
+        assert_eq!(obra(&jogo).as_deref(), Some("1 mudança sem commit"));
+        std::fs::write(jogo.join("novo.lua"), "-- novo\n").unwrap();
+        assert_eq!(obra(&jogo).as_deref(), Some("2 mudanças sem commit"));
+
+        git_teste(&jogo, &["checkout", "-q", "-b", "r0-pendencias"]);
+        assert_eq!(
+            obra(&jogo).as_deref(),
+            Some("branch r0-pendencias, 2 mudanças sem commit")
+        );
+        git_teste(&jogo, &["add", "."]);
+        git_teste(&jogo, &["commit", "-q", "-m", "dois"]);
+        assert_eq!(obra(&jogo).as_deref(), Some("branch r0-pendencias"));
+
+        git_teste(&jogo, &["checkout", "-q", "--detach"]);
+        let solto = obra(&jogo).unwrap();
+        assert!(solto.starts_with("HEAD solto em "), "{solto}");
+        assert_eq!(solto.len(), "HEAD solto em ".len() + 7, "{solto}");
+
+        std::fs::remove_dir_all(&raiz).unwrap();
+    }
+
+    #[test]
+    fn obra_le_o_principal_do_origin_head() {
+        let raiz = pasta_de_teste("principal");
+        let origem = raiz.join("origem");
+        std::fs::create_dir(&origem).unwrap();
+        git_teste(&origem, &["init", "-q", "-b", "trunk"]);
+        std::fs::write(origem.join("main.lua"), "-- jogo\n").unwrap();
+        git_teste(&origem, &["add", "."]);
+        git_teste(&origem, &["commit", "-q", "-m", "um"]);
+        git_teste(&raiz, &["clone", "-q", "origem", "jogo"]);
+
+        let jogo = raiz.join("jogo");
+        assert_eq!(obra(&jogo), None, "no trunk, que é o principal da origem");
+        git_teste(&jogo, &["checkout", "-q", "-b", "main"]);
+        assert_eq!(obra(&jogo).as_deref(), Some("branch main"));
+
+        std::fs::remove_dir_all(&raiz).unwrap();
     }
 }

@@ -12,6 +12,16 @@ Não abre o LÖVE por conta própria: chama o lançador de cada projeto, de dent
 é esse lançador que confere o runtime contra o `runtime.lock`. Precisa do `$LOVE_RUNTIME`, como
 os jogos. Quando o jogo fecha, o menu volta.
 
+O lançador abre o jogo como ele está na pasta. Quando alguém está trabalhando nela, é essa obra
+que abre, não o ramo principal (o do `origin/HEAD`, ou `main`). Por isso o menu marca o jogo cuja
+pasta está fora do principal ou tem mudanças sem commit, e a marca só informa: o Enter abre igual.
+
+```text
+  BomberBoom
+❯ Boomlitude   em obra: branch r0-pendencias, 1 mudança sem commit
+  CampCrawler
+```
+
 Os três lançadores forçam o X11 (`SDL_VIDEO_DRIVER=x11`). Antes de abrir, o `jogar` confere se
 há um X atendendo no `DISPLAY` deste terminal; se não houver, o menu avisa no lugar da pergunta e
 o Enter não abre nada, e `jogar <jogo>` sai com 2 numa linha, em vez do stack trace do LÖVE
