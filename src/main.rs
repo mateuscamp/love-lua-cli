@@ -7,6 +7,9 @@
 
 use std::env;
 use std::io;
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::{SocketAddr, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, ExitCode};
@@ -64,6 +67,54 @@ fn comando(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Command {
     comando
 }
 
+/// O número do display local em `valor` (`:0`, `:1.0`, `unix:0`). `Ok(None)` é display remoto
+/// (`localhost:10.0`, o do `ssh -X`), que daqui não se confere; `Err` é valor que não é display.
+fn display_local(valor: &str) -> Result<Option<u32>, ()> {
+    let (maquina, resto) = valor.rsplit_once(':').ok_or(())?;
+    let numero = resto
+        .split_once('.')
+        .map_or(resto, |(numero, _tela)| numero);
+    let numero: u32 = numero.parse().map_err(|_| ())?;
+    match maquina {
+        "" | "unix" => Ok(Some(numero)),
+        _ => Ok(None),
+    }
+}
+
+/// Confere se há um X atendendo no `display`, procurando o socket dele em `sockets` (no sistema,
+/// `/tmp/.X11-unix`). Os três lançadores forçam `SDL_VIDEO_DRIVER=x11`, e sem X o jogo morre no
+/// boot com um stack trace ("x11 not available"); isto avisa antes, numa linha.
+fn tela_x(display: Option<&str>, sockets: &Path) -> Result<(), String> {
+    let valor = display.unwrap_or("");
+    if valor.is_empty() {
+        return Err("sem tela X: o DISPLAY está vazio".to_string());
+    }
+    let numero = match display_local(valor) {
+        Ok(Some(numero)) => numero,
+        Ok(None) => return Ok(()),
+        Err(()) => return Err(format!("sem tela X: DISPLAY={valor:?} não é um display")),
+    };
+    // O X local escuta num socket de arquivo e, no Linux, também num abstrato de mesmo nome.
+    let caminho = sockets.join(format!("X{numero}"));
+    let atende = UnixStream::connect(&caminho).is_ok()
+        || SocketAddr::from_abstract_name(caminho.as_os_str().as_bytes())
+            .and_then(|endereco| UnixStream::connect_addr(&endereco))
+            .is_ok();
+    if atende {
+        Ok(())
+    } else {
+        Err(format!("sem tela X: ninguém atende no DISPLAY={valor:?}"))
+    }
+}
+
+/// A `tela_x` deste processo.
+fn tela() -> Result<(), String> {
+    tela_x(
+        env::var("DISPLAY").ok().as_deref(),
+        Path::new("/tmp/.X11-unix"),
+    )
+}
+
 /// Abre o jogo e espera ele fechar. Devolve o código de saída do lançador (128 + sinal, se ele
 /// morreu por sinal), ou o erro de antes de ele abrir.
 fn abre(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Result<u8, String> {
@@ -89,7 +140,7 @@ fn abre(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Result<u8, String> {
 }
 
 /// O menu: setas escolhem, Enter abre, Esc ou q sai. Quando o jogo fecha, o menu volta no mesmo
-/// jogo.
+/// jogo. Sem tela X, a pergunta vira o aviso e o Enter não abre nada.
 fn menu(raiz: &Path) -> ExitCode {
     // O Select esconde o cursor enquanto desenha, e o Ctrl+C mata o processo antes de ele
     // devolver: sem isto o terminal fica sem cursor.
@@ -100,14 +151,22 @@ fn menu(raiz: &Path) -> ExitCode {
     let nomes: Vec<&str> = JOGOS.iter().map(|jogo| jogo.nome).collect();
     let mut escolhido = 0;
     loop {
+        let tela = tela();
+        let pergunta = match &tela {
+            Ok(()) => "Qual jogo? (Enter abre, Esc sai)".to_string(),
+            Err(aviso) => format!("{aviso}; nenhum jogo abre (Esc sai)"),
+        };
         let escolha = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Qual jogo? (Enter abre, Esc sai)")
+            .with_prompt(pergunta)
             .items(&nomes)
             .default(escolhido)
             .interact_opt();
         match escolha {
             Ok(Some(i)) => {
                 escolhido = i;
+                if tela.is_err() {
+                    continue;
+                }
                 match abre(raiz, &JOGOS[i], &[]) {
                     Ok(0) => {}
                     Ok(codigo) => eprintln!("jogar: {} saiu com {codigo}", JOGOS[i].nome),
@@ -160,6 +219,10 @@ fn main() -> ExitCode {
         eprint!("jogar: não conheço o jogo {nome:?}\n\n{}", ajuda());
         return ExitCode::from(2);
     };
+    if let Err(aviso) = tela() {
+        eprintln!("jogar: {} não abre: {aviso}", jogo.nome);
+        return ExitCode::from(2);
+    }
     let extras: Vec<String> = argumentos.collect();
     match abre(&raiz, jogo, &extras) {
         Ok(codigo) => ExitCode::from(codigo),
@@ -173,6 +236,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod testes {
     use super::*;
+    use std::os::unix::net::UnixListener;
 
     #[test]
     fn procura_pela_pasta_sem_olhar_a_caixa() {
@@ -202,5 +266,37 @@ mod testes {
             ["ferramentas/love/lanca.lua", "."]
         );
         assert_eq!(c.get_current_dir(), Some(Path::new("/r/boomlitude")));
+    }
+
+    #[test]
+    fn display_local_le_o_numero_e_deixa_o_remoto_de_fora() {
+        assert_eq!(display_local(":0"), Ok(Some(0)));
+        assert_eq!(display_local(":1.0"), Ok(Some(1)));
+        assert_eq!(display_local("unix:2"), Ok(Some(2)));
+        assert_eq!(display_local("localhost:10.0"), Ok(None));
+        for errado in ["", ":", "0", ":abc", ":0x"] {
+            assert_eq!(display_local(errado), Err(()), "{errado:?}");
+        }
+    }
+
+    #[test]
+    fn tela_x_so_passa_com_alguem_atendendo_no_socket() {
+        let sockets = env::temp_dir().join(format!("jogar-teste-{}", process::id()));
+        std::fs::create_dir_all(&sockets).unwrap();
+        let _x5 = UnixListener::bind(sockets.join("X5")).unwrap();
+
+        assert_eq!(tela_x(Some(":5"), &sockets), Ok(()));
+        assert_eq!(tela_x(Some("localhost:10.0"), &sockets), Ok(()));
+        let sem_ninguem = tela_x(Some(":6"), &sockets).unwrap_err();
+        assert!(sem_ninguem.contains(r#"DISPLAY=":6""#), "{sem_ninguem}");
+        assert!(tela_x(None, &sockets).unwrap_err().contains("vazio"));
+        assert!(tela_x(Some(""), &sockets).unwrap_err().contains("vazio"));
+        assert!(
+            tela_x(Some(":abc"), &sockets)
+                .unwrap_err()
+                .contains("não é um display")
+        );
+
+        std::fs::remove_dir_all(&sockets).unwrap();
     }
 }

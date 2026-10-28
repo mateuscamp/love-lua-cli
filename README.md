@@ -12,6 +12,11 @@ Não abre o LÖVE por conta própria: chama o lançador de cada projeto, de dent
 é esse lançador que confere o runtime contra o `runtime.lock`. Precisa do `$LOVE_RUNTIME`, como
 os jogos. Quando o jogo fecha, o menu volta.
 
+Os três lançadores forçam o X11 (`SDL_VIDEO_DRIVER=x11`). Antes de abrir, o `jogar` confere se
+há um X atendendo no `DISPLAY` deste terminal; se não houver, o menu avisa no lugar da pergunta e
+o Enter não abre nada, e `jogar <jogo>` sai com 2 numa linha, em vez do stack trace do LÖVE
+("x11 not available"). Um terminal novo, ou `export DISPLAY=:0`, resolve.
+
 | Jogo        | Lançador do projeto                      |
 |-------------|------------------------------------------|
 | BomberBoom  | `tools/love .`                           |
@@ -24,5 +29,5 @@ Se um projeto mudar o lançador, ou para pôr outro jogo, mude a tabela `JOGOS` 
 ## Instalar
 
 ```bash
-cargo install --path jogar
+cargo install --path .
 ```
