@@ -2,8 +2,9 @@
 name = "jogar"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Escolhe um dos jogos LÖVE de ~/lua e abre pelo lançador do próprio projeto"
 
 [dependencies]
-ctrlc = "3.5.2"
-dialoguer = { version = "0.12.0", default-features = false }
+libc = "0.2.191"
+ratatui = "0.30.2"
