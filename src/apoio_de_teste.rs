@@ -34,8 +34,8 @@ pub fn pasta_de_teste(nome: &str) -> PathBuf {
     pasta
 }
 
-/// Um jogo de mentira em `raiz/pasta`, com o `tools/love` (o lançador do BomberBoom e do
-/// CampCrawler) feito do `corpo` em sh. Ele roda na pasta do jogo, como o de verdade.
+/// Um jogo de mentira em `raiz/pasta`, com o `tools/love` (o lançador dos três jogos) feito do
+/// `corpo` em sh. Ele roda na pasta do jogo, como o de verdade.
 ///
 /// Quem escreve o script é outro processo. Se fosse este, um fork de outro teste em paralelo
 /// herdaria o descritor de escrita, e o exec do lançador falharia com "Text file busy" (ETXTBSY:
@@ -93,6 +93,6 @@ pub fn morre_em(pid: i32, prazo: Duration) -> bool {
     false
 }
 
-/// O lançador de mentira deixa um neto (como o LÖVE debaixo do luajit do Boomlitude), anota o
-/// pid dele e espera.
+/// O lançador de mentira deixa um neto (como um lançador que abrisse o LÖVE como filho, e não no
+/// lugar dele), anota o pid dele e espera.
 pub const LANCADOR_COM_NETO: &str = "sleep 30 &\necho $! > neto\nwait\n";

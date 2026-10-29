@@ -21,7 +21,7 @@ lançador, a branch, as mudanças sem commit e o último commit do escolhido.
 ╭ jogar ────────────────────────────────────────────────────────── tela X :0 ✓ ╮
 │╭ Jogos ──────────╮╭ Boomlitude ─────────────────────────────────────────────╮│
 ││  BomberBoom     ││ pasta     ~/lua/boomlitude                              ││
-││▶ Boomlitude ●   ││ lançador  luajit ferramentas/love/lanca.lua .           ││
+││▶ Boomlitude ●   ││ lançador  tools/love .                                  ││
 ││  CampCrawler    ││ branch    r0-pendencias ● em obra                       ││
 ││                 ││ mudanças  5 mudanças sem commit                         ││
 ││                 ││ último    48f0ad1 · há 12m                              ││
@@ -72,7 +72,7 @@ ln /tmp/.X11-unix/X0_ /tmp/.X11-unix/X0
 | Jogo        | Lançador do projeto                      |
 |-------------|------------------------------------------|
 | BomberBoom  | `tools/love .`                           |
-| Boomlitude  | `luajit ferramentas/love/lanca.lua .`    |
+| Boomlitude  | `tools/love .`                           |
 | CampCrawler | `tools/love .`                           |
 
 Se um projeto mudar o lançador, ou para pôr outro jogo, mude a tabela `JOGOS` em

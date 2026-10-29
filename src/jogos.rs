@@ -27,7 +27,7 @@ pub const JOGOS: &[Jogo] = &[
     Jogo {
         nome: "Boomlitude",
         pasta: "boomlitude",
-        lancador: &["luajit", "ferramentas/love/lanca.lua", "."],
+        lancador: &["tools/love", "."],
     },
     Jogo {
         nome: "CampCrawler",
@@ -137,15 +137,29 @@ mod testes {
         assert_eq!(c.get_current_dir(), Some(Path::new("/r/bomberboom")));
     }
 
+    /// O lançador comum, `tools/love`, chegou ao Boomlitude em 28/10 (Compositando/boomlitude#5),
+    /// no lugar do `luajit ferramentas/love/lanca.lua`, que saiu do `main` dele.
+    #[test]
+    fn os_tres_jogos_abrem_pelo_tools_love_da_pasta() {
+        for jogo in JOGOS {
+            let c = comando(Path::new("/r"), jogo, &[]);
+            let pasta = Path::new("/r").join(jogo.pasta);
+            assert_eq!(c.get_program(), pasta.join("tools/love"), "{}", jogo.nome);
+            assert_eq!(c.get_args().collect::<Vec<_>>(), ["."], "{}", jogo.nome);
+        }
+    }
+
     #[test]
     fn lancador_sem_barra_vem_do_path_e_roda_na_pasta_do_jogo() {
-        let c = comando(Path::new("/r"), procura("boomlitude").unwrap(), &[]);
+        let jogo = Jogo {
+            nome: "Teste",
+            pasta: "teste",
+            lancador: &["luajit", "lanca.lua", "."],
+        };
+        let c = comando(Path::new("/r"), &jogo, &[]);
         assert_eq!(c.get_program(), "luajit");
-        assert_eq!(
-            c.get_args().collect::<Vec<_>>(),
-            ["ferramentas/love/lanca.lua", "."]
-        );
-        assert_eq!(c.get_current_dir(), Some(Path::new("/r/boomlitude")));
+        assert_eq!(c.get_args().collect::<Vec<_>>(), ["lanca.lua", "."]);
+        assert_eq!(c.get_current_dir(), Some(Path::new("/r/teste")));
     }
 
     /// Um BomberBoom de mentira: o `tools/love` dele escreve um fato no stdout (com a pasta, o

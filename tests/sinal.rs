@@ -24,7 +24,7 @@ struct Painel {
 }
 
 /// Abre o painel com `HOME=casa` e aperta Enter. O lançador anota quem o abriu (o jogar) e um
-/// neto, como o LÖVE debaixo do luajit do Boomlitude.
+/// neto, como um lançador que abrisse o LÖVE como filho.
 fn abre_pelo_painel(casa: &Path) -> Painel {
     jogo_falso(
         &casa.join("lua"),

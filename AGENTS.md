@@ -22,7 +22,6 @@ ignoraria este arquivo).
 - Não abrir o LÖVE nem decidir regra de jogo: chamar o lançador que o `AGENTS.md` do jogo manda
   (tabela `JOGOS`). Não é o hub descartado em 23/10. Mora aqui, não no `~/love-lua` (ADR 0003).
 - `~/lua/<jogo>`: só leitura, `git --no-optional-locks`. Nunca checkout, stash, pull ou escrita.
-- Linha do Boomlitude em `JOGOS`: não mudar até a orquestração dele mandar a nova (28/10).
 - Jogo só sob `xvfb-run -a` (display ≥ `:99`), som nulo, XDG em pasta temporária. Nunca
   `Xvfb -displayfd`: toma o `:0` e apaga o `X0` do autor (28/10). Tela do autor só com pergunta.
 - Sobra de processo: conferir por grupo (`pgrep -g`), nunca `pgrep -x love` (há LÖVE de outra

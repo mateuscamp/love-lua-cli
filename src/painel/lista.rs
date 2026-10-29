@@ -255,7 +255,7 @@ mod testes {
             "▶ Boomlitude ●",
             "BomberBoom ",
             "~/lua/boomlitude",
-            "luajit ferramentas/love/lanca.lua .",
+            "lançador  tools/love .",
             "r0-pendencias ● em obra",
             "5 mudanças sem commit",
             "48f0ad1 · há 12m",
