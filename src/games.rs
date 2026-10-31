@@ -120,7 +120,7 @@ pub fn sobe(raiz: &Path, jogo: &Jogo) -> Result<Child, String> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::{jogo_falso, pasta_de_teste};
+    use crate::test_support::{jogo_falso, pasta_de_teste};
     use std::io::{BufRead, BufReader};
 
     /// As pastas dos `jogos`, na ordem, para comparar de uma vez.

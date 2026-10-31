@@ -40,13 +40,13 @@ ignoraria este arquivo).
 ## Mapa
 
 - `main.rs`: argumentos e raiz; painel ou `jogar <jogo>` direto.
-- `jogos.rs`: `descobre`, `procura`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
-- `lancador_comum.rs`: a cópia do lançador em cada jogo e quais destoam.
-- `tela.rs`: X antes de abrir. `obra.rs`: git das pastas. `fatos.rs`: linhas do jogo, `Placar`.
-- `painel/`: `mod.rs` laço e lista (único com terminal); `processo.rs` jogo rodando (único com
-  processo); `sinais.rs`; `lista.rs`, `partida.rs` só desenham; `tema.rs` cores e degradê;
-  `teclas.rs`, `formato.rs` puros; `apoio_de_tela.rs` só nos testes.
-- `apoio_de_teste.rs`: ajudantes; `tests/` o inclui por `#[path]`.
+- `games.rs`: `descobre`, `procura`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
+- `shared_launcher.rs`: a cópia do lançador em cada jogo e quais destoam.
+- `x_display.rs`: X antes de abrir. `git_state.rs`: git das pastas. `facts.rs`: linhas do jogo, `Placar`.
+- `panel/`: `mod.rs` laço e lista (único com terminal); `game_process.rs` jogo rodando (único com
+  processo); `signals.rs`; `list_screen.rs`, `live_screen.rs` só desenham; `theme.rs` cores e degradê;
+  `keys.rs`, `formatting.rs` puros; `draw_test_support.rs` só nos testes.
+- `test_support.rs`: ajudantes; `tests/` o inclui por `#[path]`.
 
 ## Código (Clean Code para agente, Akita)
 
@@ -56,8 +56,8 @@ ignoraria este arquivo).
 - `unwrap`/`expect` fora de teste: só invariante, com o porquê.
 - Retorno cedo; no máximo 2 níveis de indentação.
 - Mundo por parâmetro (raiz, display, sockets); só invólucro fino lê `env`.
-- `ratatui` só em `painel/`; desenho recebe `Vista…` pronta.
-- Cor só pelas constantes e pintores de `tema.rs`; nada de `.red()`, `.green()` solto.
+- `ratatui` só em `panel/`; desenho recebe `Vista…` pronta.
+- Cor só pelas constantes e pintores de `theme.rs`; nada de `.red()`, `.green()` solto.
 - `///` em toda função: intenção e limite. Comentário: porquê e proveniência. Manter comentário
   existente; tirar só o falso.
 

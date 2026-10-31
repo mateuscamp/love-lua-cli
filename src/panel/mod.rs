@@ -7,14 +7,14 @@
 //! suspender e retomar o modo cru. Quando a janela do jogo fecha, a lista volta com um recado.
 
 #[cfg(test)]
-mod apoio_de_tela;
-mod formato;
-mod lista;
-mod partida;
-mod processo;
-mod sinais;
-mod teclas;
-mod tema;
+mod draw_test_support;
+mod formatting;
+mod game_process;
+mod keys;
+mod list_screen;
+mod live_screen;
+mod signals;
+mod theme;
 
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -24,16 +24,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEvent};
 
-use crate::jogos::{self, Jogo};
-use crate::lancador_comum::{self, Copia};
-use crate::{obra, tela};
-use lista::{Recado, Situacao, VistaLista};
-use processo::Partida;
-use sinais::{anota_sinais_de_saida, saida_por_sinal};
-use teclas::Acao;
+use crate::games::{self, Jogo};
+use crate::shared_launcher::{self, Copia};
+use crate::{git_state, x_display};
+use game_process::Partida;
+use keys::Acao;
+use list_screen::{Recado, Situacao, VistaLista};
+use signals::{anota_sinais_de_saida, saida_por_sinal};
 
 #[cfg(test)]
-pub(crate) use apoio_de_tela::{acha, tela_de_teste, texto_da_tela};
+pub(crate) use draw_test_support::{acha, tela_de_teste, texto_da_tela};
 
 /// De quanto em quanto o painel acorda sem tecla, para o placar andar.
 const PASSO: Duration = Duration::from_millis(100);
@@ -67,13 +67,13 @@ fn laco(terminal: &mut DefaultTerminal, raiz: &Path) -> io::Result<ExitCode> {
         }
         acompanha(&mut lista, &mut partida);
         terminal.draw(|frame| match &partida {
-            Some(jogando) => partida::desenha(frame, &jogando.vista()),
-            None => lista::desenha(frame, &lista.vista()),
+            Some(jogando) => live_screen::desenha(frame, &jogando.vista()),
+            None => list_screen::desenha(frame, &lista.vista()),
         })?;
         let Some(tecla) = proxima_tecla()? else {
             continue;
         };
-        if let Some(saida) = reage(teclas::acao(tecla), &mut lista, &mut partida) {
+        if let Some(saida) = reage(keys::acao(tecla), &mut lista, &mut partida) {
             return Ok(saida);
         }
     }
@@ -170,21 +170,21 @@ impl Lista {
     /// medido antes do Gods e da descoberta).
     fn le(&mut self) {
         self.le_jogos();
-        self.tela = tela::tela();
+        self.tela = x_display::tela();
         self.display = std::env::var("DISPLAY").unwrap_or_default();
         self.lida = Instant::now();
     }
 
     /// Os jogos da raiz, com o git e a cópia do lançador de cada um; o escolhido fica na lista.
     fn le_jogos(&mut self) {
-        let jogos = jogos::descobre(&self.raiz);
+        let jogos = games::descobre(&self.raiz);
         let copias: Vec<Copia> = jogos
             .iter()
-            .map(|jogo| lancador_comum::le_copia(&self.raiz.join(&jogo.pasta)))
+            .map(|jogo| shared_launcher::le_copia(&self.raiz.join(&jogo.pasta)))
             .collect();
         self.situacoes = jogos
             .into_iter()
-            .zip(lancador_comum::destoam(&copias))
+            .zip(shared_launcher::destoam(&copias))
             .map(|(jogo, destoa)| situacao(&self.raiz, jogo, destoa))
             .collect();
         self.escolhido = self.escolhido.min(self.situacoes.len().saturating_sub(1));
@@ -246,7 +246,7 @@ impl Lista {
 }
 
 fn situacao(raiz: &Path, jogo: Jogo, destoa: bool) -> Situacao {
-    let repo = obra::repo(&raiz.join(&jogo.pasta));
+    let repo = git_state::repo(&raiz.join(&jogo.pasta));
     Situacao { jogo, repo, destoa }
 }
 
@@ -268,7 +268,7 @@ fn segundos_unix() -> i64 {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::{
+    use crate::test_support::{
         LANCADOR_COM_NETO, espera_pid, jogo_falso, morre_em, pasta_de_teste,
     };
     use std::thread;

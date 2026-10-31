@@ -109,7 +109,7 @@ pub fn apagado<'a>(texto: impl Into<Cow<'a, str>>) -> Span<'a> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::painel::{acha, tela_de_teste};
+    use crate::panel::{acha, tela_de_teste};
 
     #[test]
     fn degrade_vai_de_uma_cor_a_outra() {

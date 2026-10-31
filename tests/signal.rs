@@ -3,8 +3,8 @@
 //! fechou tem de levar o jogo junto. Auditoria de 28/10, achado A1: o jogo sobe num grupo de
 //! processos próprio e, sem isto, ficava órfão com a janela aberta.
 
-#[path = "../src/apoio_de_teste.rs"]
-mod apoio_de_teste;
+#[path = "../src/test_support.rs"]
+mod test_support;
 
 use std::io::Write;
 use std::path::Path;
@@ -12,7 +12,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use apoio_de_teste::{espera_pid, jogo_falso, morre_em, pasta_de_teste};
+use test_support::{espera_pid, jogo_falso, morre_em, pasta_de_teste};
 
 /// O painel aberto num terminal, com o jogo falso aberto pelo Enter.
 struct Painel {

@@ -5,14 +5,14 @@
 //! cópia do lançador em cada jogo), `tela` (o X antes de abrir), `obra` (o git da pasta de cada
 //! jogo), `fatos` (o que o jogo escreve enquanto roda) e `painel` (o único que fala com o terminal).
 
+mod facts;
+mod games;
+mod git_state;
+mod panel;
+mod shared_launcher;
 #[cfg(test)]
-mod apoio_de_teste;
-mod fatos;
-mod jogos;
-mod lancador_comum;
-mod obra;
-mod painel;
-mod tela;
+mod test_support;
+mod x_display;
 
 use std::env;
 use std::ffi::OsString;
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn ajuda(raiz: &Path) -> String {
-    let encontrados: Vec<String> = jogos::descobre(raiz)
+    let encontrados: Vec<String> = games::descobre(raiz)
         .into_iter()
         .map(|jogo| jogo.pasta)
         .collect();
@@ -45,15 +45,15 @@ fn ajuda(raiz: &Path) -> String {
 
 /// `jogar <jogo> [args...]`: confere a tela, abre com o terminal do jogo e sai com o código dele.
 fn direto(raiz: &Path, nome: &str, extras: &[String]) -> ExitCode {
-    let Some(jogo) = jogos::procura(raiz, nome) else {
+    let Some(jogo) = games::procura(raiz, nome) else {
         eprint!("jogar: não conheço o jogo {nome:?}\n\n{}", ajuda(raiz));
         return ExitCode::from(2);
     };
-    if let Err(aviso) = tela::tela() {
+    if let Err(aviso) = x_display::tela() {
         eprintln!("jogar: {} não abre: {aviso}", jogo.pasta);
         return ExitCode::from(2);
     }
-    match jogos::abre(raiz, &jogo, extras) {
+    match games::abre(raiz, &jogo, extras) {
         Ok(codigo) => ExitCode::from(codigo),
         Err(erro) => {
             eprintln!("jogar: {erro}");
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
     };
     let argumentos: Vec<String> = env::args().skip(1).collect();
     match argumentos.split_first() {
-        None => painel::menu(&raiz),
+        None => panel::menu(&raiz),
         Some((nome, _)) if nome == "-h" || nome == "--help" => {
             print!("{}", ajuda(&raiz));
             ExitCode::SUCCESS

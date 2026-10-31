@@ -55,7 +55,7 @@ pub fn destoam(copias: &[Copia]) -> Vec<bool> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::{jogo_falso, pasta_de_teste};
+    use crate::test_support::{jogo_falso, pasta_de_teste};
 
     /// Uma cópia só com o `tools/love`, de `conteudo`.
     fn copia(conteudo: &str) -> Copia {

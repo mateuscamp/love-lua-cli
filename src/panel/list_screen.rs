@@ -8,10 +8,10 @@ use ratatui::style::{Modifier, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use super::formato;
-use super::tema::{self, apagado, atalho};
-use crate::jogos::{Jogo, LANCADOR};
-use crate::obra::Repo;
+use super::formatting;
+use super::theme::{self, apagado, atalho};
+use crate::games::{Jogo, LANCADOR};
+use crate::git_state::Repo;
 
 /// A largura dos rótulos dos detalhes (`lançador  `).
 const ROTULO: usize = 10;
@@ -49,8 +49,8 @@ pub struct VistaLista<'a> {
 
 pub fn desenha(frame: &mut Frame, vista: &VistaLista) {
     let area = frame.area();
-    let fora = tema::bloco_de_fora()
-        .title(tema::etiqueta(" jogar "))
+    let fora = theme::bloco_de_fora()
+        .title(theme::etiqueta(" jogar "))
         .title_top(titulo_da_tela(vista).right_aligned());
     let dentro = fora.inner(area);
     frame.render_widget(fora, area);
@@ -72,13 +72,13 @@ pub fn desenha(frame: &mut Frame, vista: &VistaLista) {
     desenha_jogos(frame, esquerda, vista);
     desenha_detalhes(frame, direita, vista);
     frame.render_widget(Paragraph::new(rodape), baixo);
-    tema::moldura(frame.buffer_mut(), area);
+    theme::moldura(frame.buffer_mut(), area);
 }
 
 fn titulo_da_tela(vista: &VistaLista) -> Line<'static> {
     match vista.tela {
-        Ok(()) => Line::from(format!(" tela X {} ✓ ", vista.display)).fg(tema::CIANO),
-        Err(_) => Line::from(" sem tela X ").fg(tema::CORAL).bold(),
+        Ok(()) => Line::from(format!(" tela X {} ✓ ", vista.display)).fg(theme::CIANO),
+        Err(_) => Line::from(" sem tela X ").fg(theme::CORAL).bold(),
     }
 }
 
@@ -86,13 +86,13 @@ fn titulo_da_tela(vista: &VistaLista) -> Line<'static> {
 fn rodape(vista: &VistaLista) -> Vec<Line<'static>> {
     let mut linhas = Vec::new();
     if let Err(aviso) = vista.tela {
-        linhas.push(Line::from(format!(" {aviso}")).fg(tema::CORAL));
+        linhas.push(Line::from(format!(" {aviso}")).fg(theme::CORAL));
     }
     if let Some(recado) = vista.recado {
         let cor = if recado.problema {
-            tema::CORAL
+            theme::CORAL
         } else {
-            tema::CIANO
+            theme::CIANO
         };
         linhas.push(Line::from(format!(" {}", recado.texto)).fg(cor));
     }
@@ -123,19 +123,19 @@ fn desenha_jogos(frame: &mut Frame, area: Rect, vista: &VistaLista) {
         .map(|situacao| {
             let mut partes = vec![Span::raw(situacao.jogo.pasta.clone())];
             if em_obra(situacao) {
-                partes.push(" ●".fg(tema::ORQUIDEA));
+                partes.push(" ●".fg(theme::ORQUIDEA));
             }
             if situacao.destoa {
-                partes.push(" ≠".fg(tema::CORAL));
+                partes.push(" ≠".fg(theme::CORAL));
             }
             ListItem::new(Line::from(partes))
         })
         .collect();
-    let bloco = tema::bloco_de_dentro(" Jogos ".fg(tema::APAGADO).bold());
+    let bloco = theme::bloco_de_dentro(" Jogos ".fg(theme::APAGADO).bold());
     let dentro = bloco.inner(area);
     let lista = List::new(itens)
         .block(bloco)
-        .highlight_symbol(Line::from("▶ ").fg(tema::MAGENTA))
+        .highlight_symbol(Line::from("▶ ").fg(theme::MAGENTA))
         .highlight_style(Modifier::BOLD);
     let mut estado = ListState::default().with_selected(Some(vista.escolhido));
     frame.render_stateful_widget(lista, area, &mut estado);
@@ -143,7 +143,7 @@ fn desenha_jogos(frame: &mut Frame, area: Rect, vista: &VistaLista) {
     let linha = vista.escolhido.saturating_sub(estado.offset()) as u16;
     if linha < dentro.height {
         let faixa = Rect::new(dentro.x, dentro.y + linha, dentro.width, 1);
-        tema::barra(frame.buffer_mut(), faixa);
+        theme::barra(frame.buffer_mut(), faixa);
     }
 }
 
@@ -155,7 +155,7 @@ fn desenha_detalhes(frame: &mut Frame, area: Rect, vista: &VistaLista) {
     let jogo = &situacao.jogo;
     let mut lancador = vec![Span::raw(LANCADOR.join(" "))];
     if situacao.destoa {
-        lancador.push(" ≠ difere dos outros jogos".fg(tema::CORAL));
+        lancador.push(" ≠ difere dos outros jogos".fg(theme::CORAL));
     }
     let mut linhas = vec![
         rotulado("pasta", pasta(vista.raiz, jogo)),
@@ -163,9 +163,9 @@ fn desenha_detalhes(frame: &mut Frame, area: Rect, vista: &VistaLista) {
     ];
     linhas.extend(git(situacao.repo.as_ref(), vista.agora));
     let titulo = Span::raw(format!(" {} ", jogo.pasta))
-        .fg(tema::MAGENTA)
+        .fg(theme::MAGENTA)
         .bold();
-    let bloco = tema::bloco_de_dentro(titulo);
+    let bloco = theme::bloco_de_dentro(titulo);
     frame.render_widget(Paragraph::new(linhas).block(bloco), area);
 }
 
@@ -178,7 +178,7 @@ fn desenha_vazio(frame: &mut Frame, area: Rect, raiz: &str) {
             LANCADOR[0]
         ))),
     ];
-    let bloco = tema::bloco_de_dentro(" jogar ".fg(tema::MAGENTA).bold());
+    let bloco = theme::bloco_de_dentro(" jogar ".fg(theme::MAGENTA).bold());
     frame.render_widget(Paragraph::new(linhas).block(bloco), area);
 }
 
@@ -202,12 +202,12 @@ fn git(repo: Option<&Repo>, agora: i64) -> Vec<Line<'static>> {
         None => format!("HEAD solto em {}", repo.commit),
     };
     let ramo = if repo.desvio().is_some() {
-        vec![Span::raw(nome), " ● em obra".fg(tema::ORQUIDEA)]
+        vec![Span::raw(nome), " ● em obra".fg(theme::ORQUIDEA)]
     } else {
-        vec![Span::raw(nome).fg(tema::CIANO)]
+        vec![Span::raw(nome).fg(theme::CIANO)]
     };
     let mudancas = match repo.mudancas_por_extenso() {
-        Some(texto) => Span::raw(texto).fg(tema::ORQUIDEA),
+        Some(texto) => Span::raw(texto).fg(theme::ORQUIDEA),
         None => apagado("nenhuma"),
     };
     let mut linhas = vec![
@@ -222,7 +222,7 @@ fn ultimo(repo: &Repo, agora: i64) -> Vec<Line<'static>> {
     let Some(commit) = &repo.ultimo else {
         return vec![rotulado("último", vec![apagado("—")])];
     };
-    let ha = formato::duracao_curta((agora - commit.quando).max(0) as u64);
+    let ha = formatting::duracao_curta((agora - commit.quando).max(0) as u64);
     vec![
         rotulado(
             "último",
@@ -235,8 +235,8 @@ fn ultimo(repo: &Repo, agora: i64) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::obra::Commit;
-    use crate::painel::{acha, tela_de_teste, tema, texto_da_tela};
+    use crate::git_state::Commit;
+    use crate::panel::{acha, tela_de_teste, texto_da_tela, theme};
 
     const AGORA: i64 = 1_793_200_000;
 
@@ -325,24 +325,28 @@ mod testes {
         let situacoes = situacoes();
         let tela = Ok(());
         let pintada = tela_de_teste(80, 14, |frame| desenha(frame, &vista(&situacoes, &tela)));
-        assert_eq!(pintada[(60, 9)].bg, tema::NOITE, "o fundo é a noite anil");
+        assert_eq!(pintada[(60, 9)].bg, theme::NOITE, "o fundo é a noite anil");
         let cantos = (pintada[(0, 0)].fg, pintada[(79, 13)].fg);
-        assert_eq!(cantos, (tema::ANIL, tema::MAGENTA), "a moldura em degradê");
+        assert_eq!(
+            cantos,
+            (theme::ANIL, theme::MAGENTA),
+            "a moldura em degradê"
+        );
         let cor = |texto: &str| {
             let (x, y) = acha(&pintada, texto);
             (pintada[(x, y)].fg, pintada[(x, y)].bg)
         };
         assert_eq!(
             cor("jogar"),
-            (tema::NOITE, tema::MAGENTA),
+            (theme::NOITE, theme::MAGENTA),
             "o título é etiqueta"
         );
-        assert_eq!(cor("✓"), (tema::CIANO, tema::NOITE));
-        assert_eq!(cor("▶ boomlitude"), (tema::MAGENTA, tema::BARRA.0));
-        assert_eq!(cor("●").0, tema::ORQUIDEA, "a marca da obra na lista");
-        assert_eq!(cor("● em obra").0, tema::ORQUIDEA);
-        assert_eq!(cor("≠").0, tema::CORAL, "o lançador que destoa");
-        assert_eq!(cor("Enter").0, tema::MAGENTA, "a tecla da ajuda");
+        assert_eq!(cor("✓"), (theme::CIANO, theme::NOITE));
+        assert_eq!(cor("▶ boomlitude"), (theme::MAGENTA, theme::BARRA.0));
+        assert_eq!(cor("●").0, theme::ORQUIDEA, "a marca da obra na lista");
+        assert_eq!(cor("● em obra").0, theme::ORQUIDEA);
+        assert_eq!(cor("≠").0, theme::CORAL, "o lançador que destoa");
+        assert_eq!(cor("Enter").0, theme::MAGENTA, "a tecla da ajuda");
     }
 
     /// No terminal baixo a lista rola, e a barra vai com o escolhido.
@@ -354,7 +358,7 @@ mod testes {
         ultima.escolhido = 2;
         let pintada = tela_de_teste(80, 7, |frame| desenha(frame, &ultima));
         let (x, y) = acha(&pintada, "▶ campcrawler");
-        assert_eq!(pintada[(x, y)].bg, tema::BARRA.0);
+        assert_eq!(pintada[(x, y)].bg, theme::BARRA.0);
     }
 
     /// O escolhido cujo lançador destoa diz isso nos detalhes, em coral.

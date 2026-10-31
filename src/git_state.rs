@@ -134,7 +134,7 @@ impl Repo {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::{git_teste, pasta_de_teste};
+    use crate::test_support::{git_teste, pasta_de_teste};
 
     fn obra(pasta: &Path) -> Option<String> {
         repo(pasta)?.obra()

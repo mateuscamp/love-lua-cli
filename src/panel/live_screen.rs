@@ -12,9 +12,9 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
-use super::formato;
-use super::tema::{self, apagado, atalho};
-use crate::fatos::{ERRO, Placar, TEXTO, Tipo};
+use super::formatting;
+use super::theme::{self, apagado, atalho};
+use crate::facts::{ERRO, Placar, TEXTO, Tipo};
 
 /// Até quanto tempo depois de chegar a linha sai marcada.
 const RECENTE: Duration = Duration::from_secs(1);
@@ -33,10 +33,13 @@ pub struct VistaPartida<'a> {
 pub fn desenha(frame: &mut Frame, vista: &VistaPartida) {
     let area = frame.area();
     let titulo = Line::from(vec![
-        tema::etiqueta(format!(" {} ", vista.nome)),
-        Span::raw(format!("· jogando há {} ", formato::relogio(vista.agora))),
+        theme::etiqueta(format!(" {} ", vista.nome)),
+        Span::raw(format!(
+            "· jogando há {} ",
+            formatting::relogio(vista.agora)
+        )),
     ]);
-    let fora = tema::bloco_de_fora()
+    let fora = theme::bloco_de_fora()
         .title(titulo)
         .title_top(fatos_e_faisca(vista).right_aligned());
     let dentro = fora.inner(area);
@@ -47,24 +50,24 @@ pub fn desenha(frame: &mut Frame, vista: &VistaPartida) {
             .areas(dentro);
     frame.render_widget(tabela(vista), meio);
     frame.render_widget(Paragraph::new(rodape), baixo);
-    tema::moldura(frame.buffer_mut(), area);
+    theme::moldura(frame.buffer_mut(), area);
 }
 
 /// Quantos fatos e a faísca do ritmo, cada bloco do anil (pouco) ao magenta (o máximo).
 fn fatos_e_faisca(vista: &VistaPartida) -> Line<'static> {
     let ritmo = vista.placar.ritmo(vista.agora, JANELAS_DA_FAISCA);
     let mut partes = vec![Span::raw(format!(" {} fatos ", vista.placar.total()))];
-    partes.extend(formato::degraus(&ritmo).into_iter().map(|degrau| {
-        let cor = tema::degrade(tema::ANIL, tema::MAGENTA, degrau as f32 / 7.0);
-        Span::raw(formato::BLOCOS[degrau].to_string()).fg(cor)
+    partes.extend(formatting::degraus(&ritmo).into_iter().map(|degrau| {
+        let cor = theme::degrade(theme::ANIL, theme::MAGENTA, degrau as f32 / 7.0);
+        Span::raw(formatting::BLOCOS[degrau].to_string()).fg(cor)
     }));
     partes.push(Span::raw(" "));
     Line::from(partes)
 }
 
 fn tabela(vista: &VistaPartida) -> Table<'static> {
-    let cabecalho =
-        Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"]).style(Style::new().bold().fg(tema::APAGADO));
+    let cabecalho = Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"])
+        .style(Style::new().bold().fg(theme::APAGADO));
     let linhas = vista
         .placar
         .tipos()
@@ -88,18 +91,18 @@ fn linha(tipo: &Tipo, vista: &VistaPartida) -> Row<'static> {
     let desde = vista.agora.saturating_sub(tipo.ultimo_em);
     let marca = if desde < RECENTE { "▸" } else { " " };
     let nome = Line::from(vec![
-        Span::raw(marca).fg(tema::MAGENTA),
+        Span::raw(marca).fg(theme::MAGENTA),
         Span::raw(tipo.nome.clone()).fg(cor_do_tipo(tipo)),
     ]);
     let ultimo = if tipo.nome == "CONFIG" {
         config(vista.placar)
     } else {
-        formato::resumo(&tipo.campos)
+        formatting::resumo(&tipo.campos)
     };
     let celulas = [
         Cell::from(nome),
         Cell::from(Line::from(tipo.vezes.to_string()).right_aligned()),
-        Cell::from(formato::duracao_curta(desde.as_secs())),
+        Cell::from(formatting::duracao_curta(desde.as_secs())),
         Cell::from(ultimo),
     ];
     Row::new(celulas).style(estilo(tipo, desde))
@@ -107,8 +110,8 @@ fn linha(tipo: &Tipo, vista: &VistaPartida) -> Row<'static> {
 
 fn estilo(tipo: &Tipo, desde: Duration) -> Style {
     match tipo.nome.as_str() {
-        ERRO => Style::new().fg(tema::CORAL),
-        TEXTO => Style::new().fg(tema::APAGADO),
+        ERRO => Style::new().fg(theme::CORAL),
+        TEXTO => Style::new().fg(theme::APAGADO),
         _ if desde < RECENTE => Style::new().bold(),
         _ => Style::new(),
     }
@@ -117,9 +120,9 @@ fn estilo(tipo: &Tipo, desde: Duration) -> Style {
 /// O nome do tipo: em orquídea, menos o `erro` e o `texto`, que ficam com a cor da linha.
 fn cor_do_tipo(tipo: &Tipo) -> Color {
     match tipo.nome.as_str() {
-        ERRO => tema::CORAL,
-        TEXTO => tema::APAGADO,
-        _ => tema::ORQUIDEA,
+        ERRO => theme::CORAL,
+        TEXTO => theme::APAGADO,
+        _ => theme::ORQUIDEA,
     }
 }
 
@@ -139,7 +142,7 @@ fn config(placar: &Placar) -> String {
 fn rodape(placar: &Placar) -> Vec<Line<'static>> {
     let mut linhas = Vec::new();
     if let Some(erro) = placar.primeiro_erro() {
-        linhas.push(Line::from(format!(" erro: {erro}")).fg(tema::CORAL));
+        linhas.push(Line::from(format!(" erro: {erro}")).fg(theme::CORAL));
     }
     linhas.push(Line::from(vec![
         Span::raw(" "),
@@ -154,8 +157,8 @@ fn rodape(placar: &Placar) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::fatos::Origem;
-    use crate::painel::{acha, tela_de_teste, tema, texto_da_tela};
+    use crate::facts::Origem;
+    use crate::panel::{acha, tela_de_teste, texto_da_tela, theme};
 
     fn placar() -> Placar {
         let mut placar = Placar::novo("CampCrawler");
@@ -224,17 +227,17 @@ mod testes {
             let (x, y) = acha(&pintada, texto);
             (pintada[(x, y)].fg, pintada[(x, y)].bg)
         };
-        assert_eq!(cor("CampCrawler"), (tema::NOITE, tema::MAGENTA));
-        assert_eq!(pintada[(0, 0)].fg, tema::ANIL, "a moldura em degradê");
+        assert_eq!(cor("CampCrawler"), (theme::NOITE, theme::MAGENTA));
+        assert_eq!(pintada[(0, 0)].fg, theme::ANIL, "a moldura em degradê");
         assert_eq!(
             cor("▸VEZ").0,
-            tema::MAGENTA,
+            theme::MAGENTA,
             "a marca do que acabou de mudar"
         );
-        assert_eq!(cor("VEZ ").0, tema::ORQUIDEA, "o tipo");
+        assert_eq!(cor("VEZ ").0, theme::ORQUIDEA, "o tipo");
         // A faísca vai do anil, no bloco baixo, ao magenta, no alto.
-        assert_eq!(cor("▁").0, tema::ANIL);
-        assert_eq!(cor("█").0, tema::MAGENTA);
+        assert_eq!(cor("▁").0, theme::ANIL);
+        assert_eq!(cor("█").0, theme::MAGENTA);
     }
 
     #[test]

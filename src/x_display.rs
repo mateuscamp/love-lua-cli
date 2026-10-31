@@ -71,7 +71,7 @@ pub fn tela() -> Result<(), String> {
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::pasta_de_teste;
+    use crate::test_support::pasta_de_teste;
     use std::os::unix::net::UnixListener;
 
     #[test]

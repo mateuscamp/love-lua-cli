@@ -9,11 +9,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::lista::Recado;
-use super::partida::VistaPartida;
-use super::{formato, sinais};
-use crate::fatos::{Origem, Placar};
-use crate::jogos::{self, Jogo};
+use super::list_screen::Recado;
+use super::live_screen::VistaPartida;
+use super::{formatting, signals};
+use crate::facts::{Origem, Placar};
+use crate::games::{self, Jogo};
 
 /// Quanto o Ctrl+C espera o jogo fechar depois do SIGTERM, antes do SIGKILL.
 const ESPERA_DO_FIM: Duration = Duration::from_secs(2);
@@ -35,7 +35,7 @@ pub(super) struct Partida {
 
 impl Partida {
     pub(super) fn sobe(raiz: &Path, jogo: &Jogo) -> Result<Partida, String> {
-        let mut filho = jogos::sobe(raiz, jogo)?;
+        let mut filho = games::sobe(raiz, jogo)?;
         let (envia, chegadas) = mpsc::channel();
         let saida = filho
             .stdout
@@ -47,7 +47,7 @@ impl Partida {
             .expect("jogos::sobe põe o stderr num cano");
         escuta(saida, Origem::Saida, envia.clone());
         escuta(erro, Origem::Erro, envia);
-        sinais::anota_grupo_do_jogo(filho.id() as i32);
+        signals::anota_grupo_do_jogo(filho.id() as i32);
         Ok(Partida {
             jogo: jogo.clone(),
             filho,
@@ -71,12 +71,12 @@ impl Partida {
     pub(super) fn fim(&mut self) -> Option<Recado> {
         let estado = self.filho.try_wait().ok().flatten()?;
         // Colhido, o pid pode voltar a outro processo: o tratador de sinal não o mira mais.
-        sinais::anota_grupo_do_jogo(0);
+        signals::anota_grupo_do_jogo(0);
         // As threads dos canos podem ainda ter as últimas linhas; o erro do boot costuma estar nelas.
         thread::sleep(Duration::from_millis(50));
         self.recolhe();
         let fim = Fim {
-            codigo: jogos::codigo(estado),
+            codigo: games::codigo(estado),
             encerrado: self.encerrado,
             decorrido: self.inicio.elapsed(),
         };
@@ -132,7 +132,7 @@ struct Fim {
 /// O recado da lista quando o jogo fecha: fechou (código 0), encerrado (pelo `x`), ou saiu com o
 /// código e, se houver, a primeira linha do stderr, que num jogo que morre no boot diz por quê.
 fn recado_do_fim(nome: &str, fim: &Fim, placar: &Placar) -> Recado {
-    let duracao = formato::relogio(fim.decorrido);
+    let duracao = formatting::relogio(fim.decorrido);
     let fatos = format!("{} fatos", placar.total());
     let codigo = fim.codigo;
     let (texto, problema) = match (codigo, fim.encerrado, placar.primeiro_erro()) {
@@ -161,7 +161,7 @@ impl Drop for Partida {
         if self.filho.try_wait().ok().flatten().is_none() {
             sinaliza_grupo(&self.filho, libc::SIGTERM);
         }
-        sinais::anota_grupo_do_jogo(0);
+        signals::anota_grupo_do_jogo(0);
     }
 }
 
@@ -193,10 +193,10 @@ fn escuta(cano: impl Read + Send + 'static, origem: Origem, envia: Sender<Chegad
 #[cfg(test)]
 mod testes {
     use super::*;
-    use crate::apoio_de_teste::{
+    use crate::games::Jogo;
+    use crate::test_support::{
         LANCADOR_COM_NETO, espera_pid, jogo_falso, morre_em, pasta_de_teste,
     };
-    use crate::jogos::Jogo;
 
     /// Auditoria de 28/10, achado A1: o jogo sobe num grupo próprio, então, se o jogar sai sem
     /// fechá-lo (sinal, pânico), ninguém mais o fecha.
