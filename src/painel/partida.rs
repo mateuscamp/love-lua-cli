@@ -1,17 +1,19 @@
 //! O desenho da partida, o "estado ao vivo" (autor, 28/10): uma linha por tipo de fato, atualizada
 //! no lugar, com quantas vezes veio, há quanto tempo e o último valor; a linha que acabou de mudar
-//! sai marcada. Não rola sozinho, então fica calmo mesmo com 50 fatos por segundo.
+//! sai marcada. Não rola sozinho, então fica calmo mesmo com 50 fatos por segundo. As cores vêm de
+//! `tema`.
 
 use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
-use ratatui::style::{Style, Stylize};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table};
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
 use super::formato;
+use super::tema::{self, apagado, atalho};
 use crate::fatos::{ERRO, Placar, TEXTO, Tipo};
 
 /// Até quanto tempo depois de chegar a linha sai marcada.
@@ -29,30 +31,40 @@ pub struct VistaPartida<'a> {
 }
 
 pub fn desenha(frame: &mut Frame, vista: &VistaPartida) {
-    let titulo = format!(
-        " {} · jogando há {} ",
-        vista.nome,
-        formato::relogio(vista.agora)
-    );
-    let ritmo = formato::faisca(&vista.placar.ritmo(vista.agora, JANELAS_DA_FAISCA));
-    let contagem = format!(" {} fatos {ritmo} ", vista.placar.total());
-    let fora = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .title(Line::from(titulo).bold())
-        .title_top(Line::from(contagem).right_aligned());
-    let dentro = fora.inner(frame.area());
-    frame.render_widget(fora, frame.area());
+    let area = frame.area();
+    let titulo = Line::from(vec![
+        tema::etiqueta(format!(" {} ", vista.nome)),
+        Span::raw(format!("· jogando há {} ", formato::relogio(vista.agora))),
+    ]);
+    let fora = tema::bloco_de_fora()
+        .title(titulo)
+        .title_top(fatos_e_faisca(vista).right_aligned());
+    let dentro = fora.inner(area);
+    frame.render_widget(fora, area);
     let rodape = rodape(vista.placar);
     let [meio, baixo] =
         Layout::vertical([Constraint::Min(2), Constraint::Length(rodape.len() as u16)])
             .areas(dentro);
     frame.render_widget(tabela(vista), meio);
     frame.render_widget(Paragraph::new(rodape), baixo);
+    tema::moldura(frame.buffer_mut(), area);
+}
+
+/// Quantos fatos e a faísca do ritmo, cada bloco do anil (pouco) ao magenta (o máximo).
+fn fatos_e_faisca(vista: &VistaPartida) -> Line<'static> {
+    let ritmo = vista.placar.ritmo(vista.agora, JANELAS_DA_FAISCA);
+    let mut partes = vec![Span::raw(format!(" {} fatos ", vista.placar.total()))];
+    partes.extend(formato::degraus(&ritmo).into_iter().map(|degrau| {
+        let cor = tema::degrade(tema::ANIL, tema::MAGENTA, degrau as f32 / 7.0);
+        Span::raw(formato::BLOCOS[degrau].to_string()).fg(cor)
+    }));
+    partes.push(Span::raw(" "));
+    Line::from(partes)
 }
 
 fn tabela(vista: &VistaPartida) -> Table<'static> {
     let cabecalho =
-        Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"]).style(Style::new().bold().dark_gray());
+        Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"]).style(Style::new().bold().fg(tema::APAGADO));
     let linhas = vista
         .placar
         .tipos()
@@ -75,13 +87,17 @@ fn tabela(vista: &VistaPartida) -> Table<'static> {
 fn linha(tipo: &Tipo, vista: &VistaPartida) -> Row<'static> {
     let desde = vista.agora.saturating_sub(tipo.ultimo_em);
     let marca = if desde < RECENTE { "▸" } else { " " };
+    let nome = Line::from(vec![
+        Span::raw(marca).fg(tema::MAGENTA),
+        Span::raw(tipo.nome.clone()).fg(cor_do_tipo(tipo)),
+    ]);
     let ultimo = if tipo.nome == "CONFIG" {
         config(vista.placar)
     } else {
         formato::resumo(&tipo.campos)
     };
     let celulas = [
-        Cell::from(format!("{marca}{}", tipo.nome)),
+        Cell::from(nome),
         Cell::from(Line::from(tipo.vezes.to_string()).right_aligned()),
         Cell::from(formato::duracao_curta(desde.as_secs())),
         Cell::from(ultimo),
@@ -91,10 +107,19 @@ fn linha(tipo: &Tipo, vista: &VistaPartida) -> Row<'static> {
 
 fn estilo(tipo: &Tipo, desde: Duration) -> Style {
     match tipo.nome.as_str() {
-        ERRO => Style::new().red(),
-        TEXTO => Style::new().dark_gray(),
+        ERRO => Style::new().fg(tema::CORAL),
+        TEXTO => Style::new().fg(tema::APAGADO),
         _ if desde < RECENTE => Style::new().bold(),
         _ => Style::new(),
+    }
+}
+
+/// O nome do tipo: em orquídea, menos o `erro` e o `texto`, que ficam com a cor da linha.
+fn cor_do_tipo(tipo: &Tipo) -> Color {
+    match tipo.nome.as_str() {
+        ERRO => tema::CORAL,
+        TEXTO => tema::APAGADO,
+        _ => tema::ORQUIDEA,
     }
 }
 
@@ -114,10 +139,15 @@ fn config(placar: &Placar) -> String {
 fn rodape(placar: &Placar) -> Vec<Line<'static>> {
     let mut linhas = Vec::new();
     if let Some(erro) = placar.primeiro_erro() {
-        linhas.push(Line::from(format!(" erro: {erro}")).red());
+        linhas.push(Line::from(format!(" erro: {erro}")).fg(tema::CORAL));
     }
-    let ajuda = " x encerra o jogo · ↑↓ rola · o painel volta quando a janela fechar";
-    linhas.push(Line::from(ajuda).dark_gray());
+    linhas.push(Line::from(vec![
+        Span::raw(" "),
+        atalho("x"),
+        apagado(" encerra o jogo · "),
+        atalho("↑↓"),
+        apagado(" rola · o painel volta quando a janela fechar"),
+    ]));
     linhas
 }
 
@@ -125,7 +155,7 @@ fn rodape(placar: &Placar) -> Vec<Line<'static>> {
 mod testes {
     use super::*;
     use crate::fatos::Origem;
-    use crate::painel::texto_da_tela;
+    use crate::painel::{acha, tela_de_teste, tema, texto_da_tela};
 
     fn placar() -> Placar {
         let mut placar = Placar::novo("CampCrawler");
@@ -184,6 +214,27 @@ mod testes {
         );
         let vez = texto.lines().find(|linha| linha.contains("▸VEZ")).unwrap();
         assert!(vez.contains(" 2 ") && vez.contains("0s"), "{vez}");
+    }
+
+    #[test]
+    fn partida_pinta_a_etiqueta_a_marca_e_a_faisca() {
+        let placar = placar();
+        let pintada = tela_de_teste(80, 12, |frame| desenha(frame, &vista(&placar)));
+        let cor = |texto: &str| {
+            let (x, y) = acha(&pintada, texto);
+            (pintada[(x, y)].fg, pintada[(x, y)].bg)
+        };
+        assert_eq!(cor("CampCrawler"), (tema::NOITE, tema::MAGENTA));
+        assert_eq!(pintada[(0, 0)].fg, tema::ANIL, "a moldura em degradê");
+        assert_eq!(
+            cor("▸VEZ").0,
+            tema::MAGENTA,
+            "a marca do que acabou de mudar"
+        );
+        assert_eq!(cor("VEZ ").0, tema::ORQUIDEA, "o tipo");
+        // A faísca vai do anil, no bloco baixo, ao magenta, no alto.
+        assert_eq!(cor("▁").0, tema::ANIL);
+        assert_eq!(cor("█").0, tema::MAGENTA);
     }
 
     #[test]

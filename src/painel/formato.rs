@@ -23,18 +23,16 @@ pub fn relogio(decorrido: Duration) -> String {
     }
 }
 
-const BLOCOS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// Os blocos da faísca do ritmo, do degrau 0 (`▁`) ao 7 (`█`); a cor de cada um vem de `tema`.
+pub const BLOCOS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-/// A faísca do ritmo: um bloco por janela, de `▁` (zero) a `█` (o máximo da série).
-pub fn faisca(contagens: &[u32]) -> String {
+/// O degrau de cada janela, de 0 (zero fatos) a 7 (o máximo da série).
+pub fn degraus(contagens: &[u32]) -> Vec<usize> {
     let maximo = u64::from(contagens.iter().copied().max().unwrap_or(0).max(1));
     contagens
         .iter()
-        .map(|&contagem| {
-            // Arredonda para cima: qualquer fato já sobe do `▁`.
-            let degrau = (u64::from(contagem) * 7).div_ceil(maximo);
-            BLOCOS[degrau as usize]
-        })
+        // Arredonda para cima: qualquer fato já sobe do degrau 0.
+        .map(|&contagem| (u64::from(contagem) * 7).div_ceil(maximo) as usize)
         .collect()
 }
 
@@ -91,7 +89,14 @@ mod testes {
     }
 
     #[test]
-    fn faisca_escala_pelo_maximo_da_serie() {
+    fn degraus_escalam_pelo_maximo_da_serie() {
+        let faisca = |contagens: &[u32]| -> String {
+            degraus(contagens)
+                .into_iter()
+                .map(|degrau| BLOCOS[degrau])
+                .collect()
+        };
+        assert_eq!(degraus(&[0, 1, 2, 4]), [0, 2, 4, 7]);
         assert_eq!(faisca(&[0, 1, 2, 4]), "▁▃▅█");
         assert_eq!(faisca(&[0, 0, 0]), "▁▁▁");
         assert_eq!(faisca(&[]), "");

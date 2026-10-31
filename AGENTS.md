@@ -12,6 +12,8 @@ ignoraria este arquivo).
 - Instalar: `cargo install --path ~/love-lua-cli`, só do `main` enviado.
 - Painel à vista: `tmux -L <sock> new-session -d -x 100 -y 30 "env ... jogar"`, `send-keys`,
   `capture-pane -p`, dentro do `xvfb-run -a`.
+- Cor à vista: `kitty --config NONE ... jogar` sob `xvfb-run -a` na caixa, `LIBGL_ALWAYS_SOFTWARE=1`,
+  `xdotool key`, `import -window root`.
 - Caixa (auditoria): `bwrap --ro-bind / /`, HOME em tmpfs, `--unshare-all`. Com jogo: `~/lua` e
   `~/.local/opt/love` só leitura, `--tmpfs /var/lib/xkb`, `/tmp/.X11-unix` 1777,
   `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`,
@@ -27,7 +29,7 @@ ignoraria este arquivo).
 - Sobra de processo: conferir por grupo (`pgrep -g`), nunca `pgrep -x love` (há LÖVE de outra
   sessão).
 - Produto (autor, 28/10): painel em tela cheia; estado ao vivo durante o jogo; obra se mostra, não
-  se impede; aviso do X0 com o `ln`.
+  se impede; aviso do X0 com o `ln`. Cores anil e magenta, em 24 bits (autor, 30/10).
 
 ## Mapa
 
@@ -35,7 +37,8 @@ ignoraria este arquivo).
 - `jogos.rs`: `JOGOS`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
 - `tela.rs`: X antes de abrir. `obra.rs`: git das pastas. `fatos.rs`: linhas do jogo, `Placar`.
 - `painel/`: `mod.rs` laço e lista (único com terminal); `processo.rs` jogo rodando (único com
-  processo); `sinais.rs`; `lista.rs`, `partida.rs` só desenham; `teclas.rs`, `formato.rs` puros.
+  processo); `sinais.rs`; `lista.rs`, `partida.rs` só desenham; `tema.rs` cores e degradê;
+  `teclas.rs`, `formato.rs` puros.
 - `apoio_de_teste.rs`: ajudantes; `tests/` o inclui por `#[path]`.
 
 ## Código (Clean Code para agente, Akita)
@@ -47,6 +50,7 @@ ignoraria este arquivo).
 - Retorno cedo; no máximo 2 níveis de indentação.
 - Mundo por parâmetro (raiz, display, sockets); só invólucro fino lê `env`.
 - `ratatui` só em `painel/`; desenho recebe `Vista…` pronta.
+- Cor só pelas constantes e pintores de `tema.rs`; nada de `.red()`, `.green()` solto.
 - `///` em toda função: intenção e limite. Comentário: porquê e proveniência. Manter comentário
   existente; tirar só o falso.
 

@@ -1,7 +1,7 @@
 //! O painel em tela cheia (autor, 28/10): a lista dos jogos com os detalhes do escolhido e,
 //! enquanto um jogo roda na janela dele, o estado ao vivo do que ele escreve. Este arquivo é o laço
 //! e a lista, o único que fala com o terminal; o jogo rodando mora em `processo`, os sinais em
-//! `sinais`, o desenho em `lista` e `partida`, as teclas em `teclas`.
+//! `sinais`, o desenho em `lista` e `partida`, as cores em `tema`, as teclas em `teclas`.
 //!
 //! O jogo sobe sem terminal (a saída num cano), então o painel fica na tela o tempo todo: não há
 //! suspender e retomar o modo cru. Quando a janela do jogo fecha, a lista volta com um recado.
@@ -12,6 +12,7 @@ mod partida;
 mod processo;
 mod sinais;
 mod teclas;
+mod tema;
 
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -243,6 +244,36 @@ fn segundos_unix() -> i64 {
         .map_or(0, |desde| desde.as_secs() as i64)
 }
 
+/// A tela que `desenho` pinta, de `largura` x `altura`, para os testes lerem texto e cor.
+#[cfg(test)]
+pub(crate) fn tela_de_teste(
+    largura: u16,
+    altura: u16,
+    desenho: impl FnOnce(&mut ratatui::Frame),
+) -> ratatui::buffer::Buffer {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(largura, altura)).unwrap();
+    terminal.draw(desenho).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// A coluna e a linha onde `texto` começa na `tela`, para o teste olhar a cor dali.
+#[cfg(test)]
+pub(crate) fn acha(tela: &ratatui::buffer::Buffer, texto: &str) -> (u16, u16) {
+    let area = tela.area;
+    let letras: Vec<String> = texto.chars().map(String::from).collect();
+    let cabe = |x: u16, y: u16| {
+        letras.iter().enumerate().all(|(i, letra)| {
+            let coluna = x + i as u16;
+            coluna < area.right() && tela[(coluna, y)].symbol() == letra
+        })
+    };
+    (area.top()..area.bottom())
+        .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+        .find(|&(x, y)| cabe(x, y))
+        .unwrap_or_else(|| panic!("{texto:?} não está na tela"))
+}
+
 /// O que `desenho` põe numa tela de `largura` x `altura`, linha a linha, para os testes lerem.
 #[cfg(test)]
 pub(crate) fn texto_da_tela(
@@ -250,10 +281,7 @@ pub(crate) fn texto_da_tela(
     altura: u16,
     desenho: impl FnOnce(&mut ratatui::Frame),
 ) -> String {
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(largura, altura)).unwrap();
-    terminal.draw(desenho).unwrap();
-    let tela = terminal.backend().buffer();
+    let tela = tela_de_teste(largura, altura, desenho);
     (0..altura)
         .map(|y| {
             (0..largura)

@@ -31,6 +31,11 @@ lançador, a branch, as mudanças sem commit e o último commit do escolhido.
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
+As cores são anil e magenta: o fundo anil-noite, a moldura em degradê do anil ao magenta, o nome
+em etiqueta magenta, a obra em orquídea, o que está certo em ciano e o que deu errado em coral.
+Pede terminal com cor de 24 bits (kitty, foot, ghostty, wezterm); no tmux sem `RGB` nas
+`terminal-features`, as cores saem aproximadas.
+
 O lançador abre o jogo como ele está na pasta. Quando alguém está trabalhando nela, é essa obra
 que abre, não o ramo principal (o do `origin/HEAD`, ou `main`). Por isso o `●` marca o jogo cuja
 pasta está fora do principal ou tem mudanças sem commit. A marca só informa: o Enter abre igual.
@@ -38,7 +43,7 @@ pasta está fora do principal ou tem mudanças sem commit. A marca só informa: 
 Enquanto o jogo roda na janela dele, o painel mostra o que ele está fazendo: uma linha por tipo
 de fato que o jogo escreve (`CAMPCRAWLER MAPA numero=1 linhas=9`), atualizada no lugar, com
 quantas vezes veio, há quanto tempo e o último valor. A linha que acabou de mudar sai com `▸`; o
-`CONFIG` mostra só o que saiu do padrão; a primeira linha do stderr fica embaixo, em vermelho. O
+`CONFIG` mostra só o que saiu do padrão; a primeira linha do stderr fica embaixo, em coral. O
 `x` encerra o jogo; quando a janela fecha, a lista volta com um recado do que aconteceu.
 
 ```text
