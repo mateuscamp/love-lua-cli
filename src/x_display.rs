@@ -1,5 +1,6 @@
-//! A tela X antes de abrir. Todo jogo roda no X11 (`SDL_VIDEO_DRIVER=x11`, regra do README), e sem
-//! X ele morre no boot com um stack trace ("x11 not available"); isto avisa antes, numa linha.
+//! The X display before opening. Every game runs on X11 (`SDL_VIDEO_DRIVER=x11`, a README rule),
+//! and without X it dies at boot with a stack trace ("x11 not available"); this warns first, in
+//! one line.
 
 use std::env;
 use std::os::linux::net::SocketAddrExt;
@@ -7,97 +8,103 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::path::Path;
 
-/// O número do display local em `valor` (`:0`, `:1.0`, `unix:0`). `Ok(None)` é display remoto
-/// (`localhost:10.0`, o do `ssh -X`), que daqui não se confere; `Err` é valor que não é display.
-fn display_local(valor: &str) -> Result<Option<u32>, ()> {
-    let (maquina, resto) = valor.rsplit_once(':').ok_or(())?;
-    let numero = resto
+/// The local display number in `value` (`:0`, `:1.0`, `unix:0`). `Ok(None)` is a remote display
+/// (`localhost:10.0`, the one from `ssh -X`), which cannot be checked from here; `Err` is a value
+/// that is not a display.
+fn local_display_number(value: &str) -> Result<Option<u32>, ()> {
+    let (host, rest) = value.rsplit_once(':').ok_or(())?;
+    let number = rest
         .split_once('.')
-        .map_or(resto, |(numero, _tela)| numero);
-    let numero: u32 = numero.parse().map_err(|_| ())?;
-    match maquina {
-        "" | "unix" => Ok(Some(numero)),
+        .map_or(rest, |(number, _screen)| number);
+    let number: u32 = number.parse().map_err(|_| ())?;
+    match host {
+        "" | "unix" => Ok(Some(number)),
         _ => Ok(None),
     }
 }
 
-/// Se alguém atende no socket `caminho`: o de arquivo ou, no Linux, o abstrato de mesmo nome.
-/// Não fala o protocolo do X, só vê se a conexão é aceita.
-fn atende(caminho: &Path) -> bool {
-    UnixStream::connect(caminho).is_ok()
-        || SocketAddr::from_abstract_name(caminho.as_os_str().as_bytes())
-            .and_then(|endereco| UnixStream::connect_addr(&endereco))
+/// Whether someone answers on the socket at `path`: the file one or, on Linux, the abstract one of
+/// the same name. It does not speak the X protocol, it only sees whether the connection is
+/// accepted.
+fn socket_answers(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
+        || SocketAddr::from_abstract_name(path.as_os_str().as_bytes())
+            .and_then(|address| UnixStream::connect_addr(&address))
             .is_ok()
 }
 
-/// Confere se há um X atendendo no `display`, procurando o socket dele em `sockets` (no sistema,
-/// `/tmp/.X11-unix`).
-pub fn tela_x(display: Option<&str>, sockets: &Path) -> Result<(), String> {
-    let valor = display.unwrap_or("");
-    if valor.is_empty() {
+/// Checks whether an X server answers on `display`, looking for its socket in `sockets` (on the
+/// system, `/tmp/.X11-unix`).
+pub fn check_display(display: Option<&str>, sockets: &Path) -> Result<(), String> {
+    let value = display.unwrap_or("");
+    if value.is_empty() {
         return Err("sem tela X: o DISPLAY está vazio".to_string());
     }
-    let numero = match display_local(valor) {
-        Ok(Some(numero)) => numero,
+    let number = match local_display_number(value) {
+        Ok(Some(number)) => number,
         Ok(None) => return Ok(()),
-        Err(()) => return Err(format!("sem tela X: DISPLAY={valor:?} não é um display")),
+        Err(()) => return Err(format!("sem tela X: DISPLAY={value:?} não é um display")),
     };
-    let socket = sockets.join(format!("X{numero}"));
-    if atende(&socket) {
+    let socket = sockets.join(format!("X{number}"));
+    if socket_answers(&socket) {
         return Ok(());
     }
-    // O XWayland do Hyprland atende pelo `X<n>_`; sem o `X<n>`, nenhum cliente novo conecta, e o
-    // link físico conserta (28/10: um `Xvfb -displayfd` tomou o `:0` e apagou o `X0`).
-    let sublinhado = sockets.join(format!("X{numero}_"));
-    if UnixStream::connect(&sublinhado).is_ok() {
+    // Hyprland's XWayland answers on `X<n>_`; without `X<n>`, no new client connects, and a hard
+    // link fixes it (28/10: an `Xvfb -displayfd` took `:0` and deleted `X0`).
+    let underscored = sockets.join(format!("X{number}_"));
+    if UnixStream::connect(&underscored).is_ok() {
         return Err(format!(
-            "sem tela X: o socket {} sumiu, mas o X{numero}_ atende; refaça com: ln {} {}",
+            "sem tela X: o socket {} sumiu, mas o X{number}_ atende; refaça com: ln {} {}",
             socket.display(),
-            sublinhado.display(),
+            underscored.display(),
             socket.display()
         ));
     }
-    Err(format!("sem tela X: ninguém atende no DISPLAY={valor:?}"))
+    Err(format!("sem tela X: ninguém atende no DISPLAY={value:?}"))
 }
 
-/// A `tela_x` deste processo.
-pub fn tela() -> Result<(), String> {
-    tela_x(
+/// `check_display` for this process.
+pub fn check_this_display() -> Result<(), String> {
+    check_display(
         env::var("DISPLAY").ok().as_deref(),
         Path::new("/tmp/.X11-unix"),
     )
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
-    use crate::test_support::pasta_de_teste;
+    use crate::test_support::test_folder;
     use std::os::unix::net::UnixListener;
 
     #[test]
-    fn display_local_le_o_numero_e_deixa_o_remoto_de_fora() {
-        assert_eq!(display_local(":0"), Ok(Some(0)));
-        assert_eq!(display_local(":1.0"), Ok(Some(1)));
-        assert_eq!(display_local("unix:2"), Ok(Some(2)));
-        assert_eq!(display_local("localhost:10.0"), Ok(None));
-        for errado in ["", ":", "0", ":abc", ":0x"] {
-            assert_eq!(display_local(errado), Err(()), "{errado:?}");
+    fn local_display_number_reads_the_number_and_leaves_the_remote_out() {
+        assert_eq!(local_display_number(":0"), Ok(Some(0)));
+        assert_eq!(local_display_number(":1.0"), Ok(Some(1)));
+        assert_eq!(local_display_number("unix:2"), Ok(Some(2)));
+        assert_eq!(local_display_number("localhost:10.0"), Ok(None));
+        for wrong in ["", ":", "0", ":abc", ":0x"] {
+            assert_eq!(local_display_number(wrong), Err(()), "{wrong:?}");
         }
     }
 
     #[test]
-    fn tela_x_so_passa_com_alguem_atendendo_no_socket() {
-        let sockets = pasta_de_teste("tela");
+    fn check_display_passes_only_with_someone_answering_on_the_socket() {
+        let sockets = test_folder("x-display");
         let _x5 = UnixListener::bind(sockets.join("X5")).unwrap();
 
-        assert_eq!(tela_x(Some(":5"), &sockets), Ok(()));
-        assert_eq!(tela_x(Some("localhost:10.0"), &sockets), Ok(()));
-        let sem_ninguem = tela_x(Some(":6"), &sockets).unwrap_err();
-        assert!(sem_ninguem.contains(r#"DISPLAY=":6""#), "{sem_ninguem}");
-        assert!(tela_x(None, &sockets).unwrap_err().contains("vazio"));
-        assert!(tela_x(Some(""), &sockets).unwrap_err().contains("vazio"));
+        assert_eq!(check_display(Some(":5"), &sockets), Ok(()));
+        assert_eq!(check_display(Some("localhost:10.0"), &sockets), Ok(()));
+        let nobody = check_display(Some(":6"), &sockets).unwrap_err();
+        assert!(nobody.contains(r#"DISPLAY=":6""#), "{nobody}");
+        assert!(check_display(None, &sockets).unwrap_err().contains("vazio"));
         assert!(
-            tela_x(Some(":abc"), &sockets)
+            check_display(Some(""), &sockets)
+                .unwrap_err()
+                .contains("vazio")
+        );
+        assert!(
+            check_display(Some(":abc"), &sockets)
                 .unwrap_err()
                 .contains("não é um display")
         );
@@ -105,23 +112,23 @@ mod testes {
         std::fs::remove_dir_all(&sockets).unwrap();
     }
 
-    /// O XWayland do Hyprland atende só pelo `X0_`; quando o `Xvfb -displayfd` das ferramentas de
-    /// teste toma o `:0`, ele apaga o `X0`, e nenhum cliente X novo conecta (28/10, 19:02; o
-    /// conserto do autor foi o link físico). O aviso diz o comando.
+    /// Hyprland's XWayland answers only on `X0_`; when the test tools' `Xvfb -displayfd` takes
+    /// `:0`, it deletes `X0`, and no new X client connects (28/10, 19:02; the author's fix was the
+    /// hard link). The warning gives the command.
     #[test]
-    fn tela_x_sem_o_x_mas_com_o_x_sublinhado_diz_o_conserto() {
-        let sockets = pasta_de_teste("tela-sublinhado");
+    fn check_display_without_x_but_with_x_underscore_gives_the_fix() {
+        let sockets = test_folder("x-display-underscore");
         let _x7 = UnixListener::bind(sockets.join("X7_")).unwrap();
         let x7 = sockets.join("X7");
         let x7_ = sockets.join("X7_");
 
-        let aviso = tela_x(Some(":7"), &sockets).unwrap_err();
-        let conserto = format!("ln {} {}", x7_.display(), x7.display());
-        assert!(aviso.contains(&conserto), "{aviso}");
-        assert!(aviso.contains("sumiu"), "{aviso}");
+        let warning = check_display(Some(":7"), &sockets).unwrap_err();
+        let fix = format!("ln {} {}", x7_.display(), x7.display());
+        assert!(warning.contains(&fix), "{warning}");
+        assert!(warning.contains("sumiu"), "{warning}");
 
         std::fs::hard_link(&x7_, &x7).unwrap();
-        assert_eq!(tela_x(Some(":7"), &sockets), Ok(()), "o conserto funciona");
+        assert_eq!(check_display(Some(":7"), &sockets), Ok(()), "the fix works");
 
         std::fs::remove_dir_all(&sockets).unwrap();
     }

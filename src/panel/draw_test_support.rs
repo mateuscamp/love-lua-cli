@@ -1,45 +1,45 @@
-//! Ajudantes dos testes de desenho do painel: a tela do `TestBackend` e a leitura dela, por texto e
-//! por cor. Saíram do `mod.rs` quando ele passou do teto de 500 linhas (31/10).
+//! Helpers for the panel's drawing tests: the `TestBackend` screen and reading it, by text and by
+//! color. They left `mod.rs` when it went past the 500-line ceiling (31/10).
 
-/// A tela que `desenho` pinta, de `largura` x `altura`, para os testes lerem texto e cor.
-pub(crate) fn tela_de_teste(
-    largura: u16,
-    altura: u16,
-    desenho: impl FnOnce(&mut ratatui::Frame),
+/// The screen that `drawing` paints, `width` x `height`, for the tests to read text and color.
+pub(crate) fn test_screen(
+    width: u16,
+    height: u16,
+    drawing: impl FnOnce(&mut ratatui::Frame),
 ) -> ratatui::buffer::Buffer {
     let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(largura, altura)).unwrap();
-    terminal.draw(desenho).unwrap();
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(drawing).unwrap();
     terminal.backend().buffer().clone()
 }
 
-/// A coluna e a linha onde `texto` começa na `tela`, para o teste olhar a cor dali.
-pub(crate) fn acha(tela: &ratatui::buffer::Buffer, texto: &str) -> (u16, u16) {
-    let area = tela.area;
-    let letras: Vec<String> = texto.chars().map(String::from).collect();
-    let cabe = |x: u16, y: u16| {
-        letras.iter().enumerate().all(|(i, letra)| {
-            let coluna = x + i as u16;
-            coluna < area.right() && tela[(coluna, y)].symbol() == letra
+/// The column and line where `text` starts on `screen`, for the test to look at the color there.
+pub(crate) fn find_text(screen: &ratatui::buffer::Buffer, text: &str) -> (u16, u16) {
+    let area = screen.area;
+    let letters: Vec<String> = text.chars().map(String::from).collect();
+    let fits = |x: u16, y: u16| {
+        letters.iter().enumerate().all(|(i, letter)| {
+            let column = x + i as u16;
+            column < area.right() && screen[(column, y)].symbol() == letter
         })
     };
     (area.top()..area.bottom())
         .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
-        .find(|&(x, y)| cabe(x, y))
-        .unwrap_or_else(|| panic!("{texto:?} não está na tela"))
+        .find(|&(x, y)| fits(x, y))
+        .unwrap_or_else(|| panic!("{text:?} is not on the screen"))
 }
 
-/// O que `desenho` põe numa tela de `largura` x `altura`, linha a linha, para os testes lerem.
-pub(crate) fn texto_da_tela(
-    largura: u16,
-    altura: u16,
-    desenho: impl FnOnce(&mut ratatui::Frame),
+/// What `drawing` puts on a `width` x `height` screen, line by line, for the tests to read.
+pub(crate) fn screen_text(
+    width: u16,
+    height: u16,
+    drawing: impl FnOnce(&mut ratatui::Frame),
 ) -> String {
-    let tela = tela_de_teste(largura, altura, desenho);
-    (0..altura)
+    let screen = test_screen(width, height, drawing);
+    (0..height)
         .map(|y| {
-            (0..largura)
-                .map(|x| tela[(x, y)].symbol())
+            (0..width)
+                .map(|x| screen[(x, y)].symbol())
                 .collect::<String>()
         })
         .collect::<Vec<_>>()

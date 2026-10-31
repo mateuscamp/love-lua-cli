@@ -1,7 +1,7 @@
-//! O jogar inteiro, o binário, num pseudo-terminal (`script`, do util-linux), com um `~/lua` de
-//! mentira: o Enter abre o jogo falso pelo painel, e o jogar que sai por sinal ou porque o terminal
-//! fechou tem de levar o jogo junto. Auditoria de 28/10, achado A1: o jogo sobe num grupo de
-//! processos próprio e, sem isto, ficava órfão com a janela aberta.
+//! The whole jogar, the binary, in a pseudo-terminal (`script`, from util-linux), with a fake
+//! `~/lua`: Enter opens the fake game through the panel, and a jogar that exits by a signal or
+//! because the terminal closed has to take the game with it. Audit of 28/10, finding A1: the game
+//! starts in its own process group and, without this, was left orphaned with its window open.
 
 #[path = "../src/test_support.rs"]
 mod test_support;
@@ -12,95 +12,96 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use test_support::{espera_pid, jogo_falso, morre_em, pasta_de_teste};
+use test_support::{dies_within, fake_game, test_folder, wait_for_pid};
 
-/// O painel aberto num terminal, com o jogo falso aberto pelo Enter.
-struct Painel {
+/// The panel open in a terminal, with the fake game opened by Enter.
+struct OpenPanel {
     terminal: Child,
-    /// Segura o stdin do `script`: sem ele, o terminal fecharia antes da hora.
-    _teclas: ChildStdin,
+    /// Holds `script`'s stdin: without it, the terminal would close too early.
+    _keys: ChildStdin,
     jogar: i32,
-    neto: i32,
+    grandchild: i32,
 }
 
-/// Abre o painel com `HOME=casa` e aperta Enter. O lançador anota quem o abriu (o jogar) e um
-/// neto, como um lançador que abrisse o LÖVE como filho.
-fn abre_pelo_painel(casa: &Path) -> Painel {
-    jogo_falso(
-        &casa.join("lua"),
+/// Opens the panel with `HOME=home` and presses Enter. The launcher writes down who opened it
+/// (jogar) and a grandchild, like a launcher that opened LÖVE as a child.
+fn open_through_the_panel(home: &Path) -> OpenPanel {
+    fake_game(
+        &home.join("lua"),
         "bomberboom",
-        "echo $PPID > jogar\nsleep 30 &\necho $! > neto\nwait\n",
+        "echo $PPID > jogar\nsleep 30 &\necho $! > grandchild\nwait\n",
     );
     let mut terminal = Command::new("script")
         .args(["-qfec", env!("CARGO_BIN_EXE_jogar"), "/dev/null"])
-        .env("HOME", casa)
-        // O `$JOGAR_RAIZ` de quem roda a suíte levaria o painel para fora da casa de mentira.
+        .env("HOME", home)
+        // The `$JOGAR_RAIZ` of whoever runs the suite would take the panel out of the fake home.
         .env_remove("JOGAR_RAIZ")
-        // Display remoto: o jogar não confere, e o jogo de mentira não precisa de X.
+        // A remote display: jogar does not check it, and the fake game needs no X.
         .env("DISPLAY", "localhost:10.0")
         .env("TERM", "xterm-256color")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("o teste precisa do script, do util-linux");
-    let mut teclas = terminal.stdin.take().unwrap();
+        .expect("the test needs script, from util-linux");
+    let mut keys = terminal.stdin.take().unwrap();
     thread::sleep(Duration::from_millis(800));
-    teclas.write_all(b"\r").unwrap();
-    let pasta = casa.join("lua/bomberboom");
-    Painel {
-        jogar: espera_pid(&pasta.join("jogar"), Duration::from_secs(5)),
-        neto: espera_pid(&pasta.join("neto"), Duration::from_secs(5)),
+    keys.write_all(b"\r").unwrap();
+    let folder = home.join("lua/bomberboom");
+    OpenPanel {
+        jogar: wait_for_pid(&folder.join("jogar"), Duration::from_secs(5)),
+        grandchild: wait_for_pid(&folder.join("grandchild"), Duration::from_secs(5)),
         terminal,
-        _teclas: teclas,
+        _keys: keys,
     }
 }
 
-/// Mata o que sobrou e apaga a casa; devolve se o neto e o jogar tinham morrido antes disso.
-fn fecha(mut painel: Painel, casa: &Path) -> (bool, bool) {
-    let neto_morreu = morre_em(painel.neto, Duration::from_secs(3));
-    let jogar_saiu = morre_em(painel.jogar, Duration::from_secs(3));
-    // SAFETY: os sinais vão só aos processos que este teste criou.
+/// Kills what is left and deletes the home; returns whether the grandchild and jogar had died
+/// before that.
+fn close(mut panel: OpenPanel, home: &Path) -> (bool, bool) {
+    let grandchild_died = dies_within(panel.grandchild, Duration::from_secs(3));
+    let jogar_exited = dies_within(panel.jogar, Duration::from_secs(3));
+    // SAFETY: the signals go only to the processes this test created.
     unsafe {
-        libc::kill(painel.neto, libc::SIGKILL);
-        libc::kill(painel.jogar, libc::SIGKILL);
+        libc::kill(panel.grandchild, libc::SIGKILL);
+        libc::kill(panel.jogar, libc::SIGKILL);
     }
-    let _ = painel.terminal.kill();
-    let _ = painel.terminal.wait();
-    std::fs::remove_dir_all(casa).unwrap();
-    (neto_morreu, jogar_saiu)
+    let _ = panel.terminal.kill();
+    let _ = panel.terminal.wait();
+    std::fs::remove_dir_all(home).unwrap();
+    (grandchild_died, jogar_exited)
 }
 
 #[test]
-fn sighup_no_jogar_fecha_o_jogo_aberto_pelo_painel() {
-    let casa = pasta_de_teste("sighup");
-    let painel = abre_pelo_painel(&casa);
-    // SAFETY: o sinal vai só ao jogar que este teste abriu.
-    unsafe { libc::kill(painel.jogar, libc::SIGHUP) };
-    let (neto, _) = fecha(painel, &casa);
-    assert!(neto, "o jogo sobreviveu ao SIGHUP no jogar");
+fn sighup_on_jogar_closes_the_game_opened_by_the_panel() {
+    let home = test_folder("sighup");
+    let panel = open_through_the_panel(&home);
+    // SAFETY: the signal goes only to the jogar this test opened.
+    unsafe { libc::kill(panel.jogar, libc::SIGHUP) };
+    let (grandchild, _) = close(panel, &home);
+    assert!(grandchild, "the game survived SIGHUP on jogar");
 }
 
-/// O terminal que fecha de verdade (o dono do pseudo-terminal morre). Diferente do SIGHUP direto:
-/// o tty fica morto, o `read` dele devolve 0, e o crossterm gira em falso lá dentro sem devolver o
-/// laço; o tratador do sinal é quem tem de fechar o jogo e sair (re-auditoria de 28/10).
+/// The terminal that really closes (the pseudo-terminal's owner dies). Unlike a direct SIGHUP: the
+/// tty stays dead, its `read` returns 0, and crossterm spins idly in there without giving the loop
+/// back; the signal handler is the one that has to close the game and exit (re-audit of 28/10).
 #[test]
-fn terminal_que_fecha_leva_o_jogo_e_o_jogar() {
-    let casa = pasta_de_teste("terminal-fecha");
-    let mut painel = abre_pelo_painel(&casa);
-    painel.terminal.kill().unwrap();
-    let (neto, jogar) = fecha(painel, &casa);
-    assert!(neto, "o jogo sobreviveu ao terminal fechado");
-    assert!(jogar, "o jogar ficou rodando com o terminal fechado");
+fn a_closing_terminal_takes_the_game_and_jogar_with_it() {
+    let home = test_folder("terminal-closes");
+    let mut panel = open_through_the_panel(&home);
+    panel.terminal.kill().unwrap();
+    let (grandchild, jogar) = close(panel, &home);
+    assert!(grandchild, "the game survived the closed terminal");
+    assert!(jogar, "jogar kept running with the terminal closed");
 }
 
 #[test]
-fn sigterm_no_jogar_fecha_o_jogo_e_o_jogar_sai() {
-    let casa = pasta_de_teste("sigterm");
-    let painel = abre_pelo_painel(&casa);
-    // SAFETY: o sinal vai só ao jogar que este teste abriu.
-    unsafe { libc::kill(painel.jogar, libc::SIGTERM) };
-    let (neto, jogar) = fecha(painel, &casa);
-    assert!(neto, "o jogo sobreviveu ao SIGTERM no jogar");
-    assert!(jogar, "o jogar não saiu com o SIGTERM");
+fn sigterm_on_jogar_closes_the_game_and_jogar_exits() {
+    let home = test_folder("sigterm");
+    let panel = open_through_the_panel(&home);
+    // SAFETY: the signal goes only to the jogar this test opened.
+    unsafe { libc::kill(panel.jogar, libc::SIGTERM) };
+    let (grandchild, jogar) = close(panel, &home);
+    assert!(grandchild, "the game survived SIGTERM on jogar");
+    assert!(jogar, "jogar did not exit with SIGTERM");
 }

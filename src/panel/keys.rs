@@ -1,70 +1,70 @@
-//! A tecla que chegou, como ação do painel. O que cada ação faz depende da vista (lista ou
-//! partida) e mora no laço; aqui só se traduz a tecla.
+//! The key that arrived, as a panel action. What each action does depends on the view (the list or
+//! the running game) and lives in the loop; here the key is only translated.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Acao {
-    Sobe,
-    Desce,
-    Abre,
-    Sai,
-    /// `x`: encerra o jogo que está rodando.
-    Encerra,
-    /// Ctrl+C: em modo cru ele chega como tecla, não como sinal.
-    Interrompe,
-    Nada,
+pub enum Action {
+    MoveUp,
+    MoveDown,
+    Open,
+    Quit,
+    /// `x`: stops the game that is running.
+    StopGame,
+    /// Ctrl+C: in raw mode it arrives as a key, not as a signal.
+    Interrupt,
+    Nothing,
 }
 
-/// A ação da tecla. Só a tecla apertada conta (o terminal pode mandar a solta também).
-pub fn acao(tecla: KeyEvent) -> Acao {
-    if tecla.kind != KeyEventKind::Press {
-        return Acao::Nada;
+/// The key's action. Only the pressed key counts (the terminal may send the released one too).
+pub fn action_for(key: KeyEvent) -> Action {
+    if key.kind != KeyEventKind::Press {
+        return Action::Nothing;
     }
-    let ctrl = tecla.modifiers.contains(KeyModifiers::CONTROL);
-    match tecla.code {
-        KeyCode::Char('c') if ctrl => Acao::Interrompe,
-        _ if ctrl => Acao::Nada,
-        KeyCode::Up | KeyCode::Char('k') => Acao::Sobe,
-        KeyCode::Down | KeyCode::Char('j') => Acao::Desce,
-        KeyCode::Enter => Acao::Abre,
-        KeyCode::Esc | KeyCode::Char('q') => Acao::Sai,
-        KeyCode::Char('x') => Acao::Encerra,
-        _ => Acao::Nada,
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('c') if ctrl => Action::Interrupt,
+        _ if ctrl => Action::Nothing,
+        KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+        KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+        KeyCode::Enter => Action::Open,
+        KeyCode::Esc | KeyCode::Char('q') => Action::Quit,
+        KeyCode::Char('x') => Action::StopGame,
+        _ => Action::Nothing,
     }
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
 
-    fn tecla(codigo: KeyCode) -> KeyEvent {
-        KeyEvent::new(codigo, KeyModifiers::NONE)
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
     }
 
     #[test]
-    fn acao_traduz_setas_vim_enter_esc_q_x_e_ctrl_c() {
-        let casos = [
-            (tecla(KeyCode::Up), Acao::Sobe),
-            (tecla(KeyCode::Char('k')), Acao::Sobe),
-            (tecla(KeyCode::Down), Acao::Desce),
-            (tecla(KeyCode::Char('j')), Acao::Desce),
-            (tecla(KeyCode::Enter), Acao::Abre),
-            (tecla(KeyCode::Esc), Acao::Sai),
-            (tecla(KeyCode::Char('q')), Acao::Sai),
-            (tecla(KeyCode::Char('x')), Acao::Encerra),
+    fn action_for_translates_arrows_vim_enter_esc_q_x_and_ctrl_c() {
+        let cases = [
+            (key(KeyCode::Up), Action::MoveUp),
+            (key(KeyCode::Char('k')), Action::MoveUp),
+            (key(KeyCode::Down), Action::MoveDown),
+            (key(KeyCode::Char('j')), Action::MoveDown),
+            (key(KeyCode::Enter), Action::Open),
+            (key(KeyCode::Esc), Action::Quit),
+            (key(KeyCode::Char('q')), Action::Quit),
+            (key(KeyCode::Char('x')), Action::StopGame),
             (
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-                Acao::Interrompe,
+                Action::Interrupt,
             ),
-            (tecla(KeyCode::Char('c')), Acao::Nada),
+            (key(KeyCode::Char('c')), Action::Nothing),
             (
                 KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release),
-                Acao::Nada,
+                Action::Nothing,
             ),
         ];
-        for (evento, esperado) in casos {
-            assert_eq!(acao(evento), esperado, "{evento:?}");
+        for (event, expected) in cases {
+            assert_eq!(action_for(event), expected, "{event:?}");
         }
     }
 }

@@ -1,56 +1,59 @@
-//! O SIGHUP (o terminal que fecha) e o SIGTERM no painel. O tratador fecha o jogo aberto ele mesmo,
-//! sem depender do laço: com o terminal fechado, o tty devolve 0 no `read`, o laço interno de
-//! leitura do crossterm só sai com `WouldBlock` e gira em falso, e o laço do painel nunca mais
-//! volta (re-auditoria de 28/10). No SIGHUP o jogar sai ali mesmo, porque não há terminal a
-//! restaurar; no SIGTERM, com o terminal vivo, o laço vê a anotação e sai pelo caminho normal.
+//! SIGHUP (the terminal that closes) and SIGTERM in the panel. The handler closes the open game
+//! itself, without depending on the loop: with the terminal closed, the tty returns 0 on `read`,
+//! crossterm's inner read loop only leaves on `WouldBlock` and spins idly, and the panel's loop
+//! never comes back (re-audit of 28/10). On SIGHUP jogar exits right there, because there is no
+//! terminal to restore; on SIGTERM, with the terminal alive, the loop sees the recorded signal and
+//! leaves the normal way.
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-/// O sinal (SIGTERM) que pediu ao painel para sair; 0 enquanto nenhum veio.
-static SINAL_DE_SAIDA: AtomicI32 = AtomicI32::new(0);
+/// The signal (SIGTERM) that asked the panel to quit; 0 while none has come.
+static EXIT_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
-/// O grupo de processos do jogo aberto; 0 sem jogo. É o pid do lançador (`jogos::sobe`).
-static GRUPO_DO_JOGO: AtomicI32 = AtomicI32::new(0);
+/// The open game's process group; 0 with no game. It is the launcher's pid (`games::spawn_piped`).
+static GAME_GROUP: AtomicI32 = AtomicI32::new(0);
 
-/// O grupo do jogo que acabou de subir, ou 0 quando ele fecha e é colhido.
-pub(super) fn anota_grupo_do_jogo(grupo: i32) {
-    GRUPO_DO_JOGO.store(grupo, Ordering::SeqCst);
+/// The group of the game that just started, or 0 when it closes and is reaped.
+pub(super) fn set_game_group(group: i32) {
+    GAME_GROUP.store(group, Ordering::SeqCst);
 }
 
-/// Só chamadas permitidas dentro de um tratador de sinal: atômicos, `killpg` e `_exit`.
-extern "C" fn trata_sinal(sinal: libc::c_int) {
-    let grupo = GRUPO_DO_JOGO.load(Ordering::SeqCst);
-    // SAFETY: killpg e _exit são async-signal-safe; o grupo é o do jogo que o painel subiu.
+/// Only calls allowed inside a signal handler: atomics, `killpg` and `_exit`.
+extern "C" fn on_exit_signal(signal: libc::c_int) {
+    let group = GAME_GROUP.load(Ordering::SeqCst);
+    // SAFETY: killpg and _exit are async-signal-safe; the group is the one of the game the panel
+    // started.
     unsafe {
-        if grupo > 0 {
-            libc::killpg(grupo, libc::SIGTERM);
+        if group > 0 {
+            libc::killpg(group, libc::SIGTERM);
         }
-        if sinal == libc::SIGHUP {
-            libc::_exit(128 + sinal);
+        if signal == libc::SIGHUP {
+            libc::_exit(128 + signal);
         }
     }
-    SINAL_DE_SAIDA.store(sinal, Ordering::SeqCst);
+    EXIT_SIGNAL.store(signal, Ordering::SeqCst);
 }
 
-/// Instala o tratador no SIGHUP e no SIGTERM. Sem ele o jogar morria na hora e o jogo, num grupo
-/// de processos próprio, ficava órfão com a janela aberta (auditoria de 28/10, A1).
-pub(super) fn anota_sinais_de_saida() {
-    for sinal in [libc::SIGHUP, libc::SIGTERM] {
-        // SAFETY: o tratador só usa chamadas async-signal-safe; a estrutura é zerada e preenchida
-        // antes da chamada.
+/// Installs the handler on SIGHUP and SIGTERM. Without it jogar died on the spot and the game, in
+/// its own process group, was left orphaned with its window open (audit of 28/10, A1).
+pub(super) fn install_exit_signals() {
+    for signal in [libc::SIGHUP, libc::SIGTERM] {
+        // SAFETY: the handler only uses async-signal-safe calls; the struct is zeroed and filled in
+        // before the call.
         unsafe {
-            let mut acao: libc::sigaction = std::mem::zeroed();
-            acao.sa_sigaction = trata_sinal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-            acao.sa_flags = libc::SA_RESTART;
-            libc::sigemptyset(&mut acao.sa_mask);
-            libc::sigaction(sinal, &acao, std::ptr::null_mut());
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction =
+                on_exit_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+            action.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut action.sa_mask);
+            libc::sigaction(signal, &action, std::ptr::null_mut());
         }
     }
 }
 
-/// A saída do jogar se um sinal pediu: 128 + sinal, como o shell daria.
-pub(super) fn saida_por_sinal() -> Option<ExitCode> {
-    let sinal = SINAL_DE_SAIDA.load(Ordering::SeqCst);
-    (sinal != 0).then(|| ExitCode::from(128 + sinal as u8))
+/// jogar's exit if a signal asked for it: 128 + signal, as the shell would give it.
+pub(super) fn exit_by_signal() -> Option<ExitCode> {
+    let signal = EXIT_SIGNAL.load(Ordering::SeqCst);
+    (signal != 0).then(|| ExitCode::from(128 + signal as u8))
 }

@@ -1,8 +1,8 @@
-//! Ajudantes dos testes: só o descartável (pasta temporária, repositório git temporário, jogo de
-//! mentira), nunca `~/lua`, `~/.cargo` nem a tela do autor. O teste de integração em `tests/`
-//! inclui este mesmo arquivo pelo `#[path]`, porque o crate é só binário.
+//! Test helpers: only disposable things (a temporary folder, a temporary git repository, a fake
+//! game), never `~/lua`, `~/.cargo` or the author's display. The integration test in `tests/`
+//! includes this same file through `#[path]`, because the crate is binary-only.
 
-#![allow(dead_code)] // cada crate de teste usa uma parte
+#![allow(dead_code)] // each test crate uses a part
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -10,82 +10,83 @@ use std::process::{self, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Roda o git em `pasta` sem a configuração do usuário (assinatura, hooks), para o teste
-/// não depender dela.
-pub fn git_teste(pasta: &Path, argumentos: &[&str]) {
-    let certo = Command::new("git")
+/// Runs git in `folder` without the user's configuration (signature, hooks), so the test does not
+/// depend on it.
+pub fn test_git(folder: &Path, args: &[&str]) {
+    let ok = Command::new("git")
         .arg("-C")
-        .arg(pasta)
-        .args(["-c", "user.name=teste", "-c", "user.email=teste@jogar"])
-        .args(argumentos)
+        .arg(folder)
+        .args(["-c", "user.name=test", "-c", "user.email=test@jogar"])
+        .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .status()
         .unwrap()
         .success();
-    assert!(certo, "git {argumentos:?}");
+    assert!(ok, "git {args:?}");
 }
 
-/// Uma pasta vazia e só deste teste (o `nome` distingue os testes que rodam em paralelo).
-pub fn pasta_de_teste(nome: &str) -> PathBuf {
-    let pasta = env::temp_dir().join(format!("jogar-{nome}-{}", process::id()));
-    let _ = std::fs::remove_dir_all(&pasta);
-    std::fs::create_dir_all(&pasta).unwrap();
-    pasta
+/// An empty folder for this test only (`name` tells apart the tests that run in parallel).
+pub fn test_folder(name: &str) -> PathBuf {
+    let folder = env::temp_dir().join(format!("jogar-{name}-{}", process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    folder
 }
 
-/// Um jogo de mentira em `raiz/pasta`, com o `tools/love` (o lançador comum dos jogos) feito do
-/// `corpo` em sh. Ele roda na pasta do jogo, como o de verdade.
+/// A fake game in `root/folder`, with `tools/love` (the games' shared launcher) made from `body`
+/// in sh. It runs in the game's folder, like the real one.
 ///
-/// Quem escreve o script é outro processo. Se fosse este, um fork de outro teste em paralelo
-/// herdaria o descritor de escrita, e o exec do lançador falharia com "Text file busy" (ETXTBSY:
-/// 5 em 40 rodadas da suíte com 32 threads, 28/10).
-pub fn jogo_falso(raiz: &Path, pasta: &str, corpo: &str) {
-    let ferramentas = raiz.join(pasta).join("tools");
-    std::fs::create_dir_all(&ferramentas).unwrap();
-    let lancador = ferramentas.join("love");
-    let certo = Command::new("sh")
+/// Another process writes the script. If this one did, a fork from another test running in
+/// parallel would inherit the write descriptor, and exec'ing the launcher would fail with "Text
+/// file busy" (ETXTBSY: 5 in 40 runs of the suite with 32 threads, 28/10).
+pub fn fake_game(root: &Path, folder: &str, body: &str) {
+    let tools = root.join(folder).join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let launcher = tools.join("love");
+    let ok = Command::new("sh")
         .args([
             "-c",
             "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
             "sh",
         ])
-        .arg(&lancador)
-        .arg(format!("#!/bin/sh\n{corpo}"))
+        .arg(&launcher)
+        .arg(format!("#!/bin/sh\n{body}"))
         .status()
         .unwrap()
         .success();
-    assert!(certo, "não escreveu {}", lancador.display());
+    assert!(ok, "did not write {}", launcher.display());
 }
 
-/// O pid que o jogo de mentira escreveu em `arquivo`, esperando até `prazo` ele aparecer.
-pub fn espera_pid(arquivo: &Path, prazo: Duration) -> i32 {
-    let fim = Instant::now() + prazo;
+/// The pid the fake game wrote to `file`, waiting up to `timeout` for it to appear.
+pub fn wait_for_pid(file: &Path, timeout: Duration) -> i32 {
+    let end = Instant::now() + timeout;
     loop {
-        let lido = std::fs::read_to_string(arquivo).unwrap_or_default();
-        if let Ok(pid) = lido.trim().parse() {
+        let read = std::fs::read_to_string(file).unwrap_or_default();
+        if let Ok(pid) = read.trim().parse() {
             return pid;
         }
-        assert!(Instant::now() < fim, "{} não apareceu", arquivo.display());
+        assert!(Instant::now() < end, "{} did not appear", file.display());
         thread::sleep(Duration::from_millis(20));
     }
 }
 
-/// Se o processo `pid` roda (zumbi conta como morto: já saiu, só falta quem o colha).
-pub fn pid_vivo(pid: i32) -> bool {
+/// Whether process `pid` is running (a zombie counts as dead: it already exited, it only waits for
+/// someone to reap it).
+pub fn pid_alive(pid: i32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(estado) => !estado
+        Ok(stat) => !stat
             .rsplit_once(") ")
-            .is_some_and(|(_, resto)| resto.starts_with('Z')),
+            .is_some_and(|(_, rest)| rest.starts_with('Z')),
         Err(_) => false,
     }
 }
 
-/// Se `pid` morre até `prazo`.
-pub fn morre_em(pid: i32, prazo: Duration) -> bool {
-    let fim = Instant::now() + prazo;
-    while Instant::now() < fim {
-        if !pid_vivo(pid) {
+/// Whether `pid` dies within `timeout`.
+pub fn dies_within(pid: i32, timeout: Duration) -> bool {
+    let end = Instant::now() + timeout;
+    while Instant::now() < end {
+        if !pid_alive(pid) {
             return true;
         }
         thread::sleep(Duration::from_millis(20));
@@ -93,6 +94,6 @@ pub fn morre_em(pid: i32, prazo: Duration) -> bool {
     false
 }
 
-/// O lançador de mentira deixa um neto (como um lançador que abrisse o LÖVE como filho, e não no
-/// lugar dele), anota o pid dele e espera.
-pub const LANCADOR_COM_NETO: &str = "sleep 30 &\necho $! > neto\nwait\n";
+/// The fake launcher leaves a grandchild (like a launcher that opened LÖVE as a child, rather than
+/// in its own place), writes down its pid and waits.
+pub const LAUNCHER_WITH_GRANDCHILD: &str = "sleep 30 &\necho $! > grandchild\nwait\n";

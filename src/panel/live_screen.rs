@@ -1,7 +1,7 @@
-//! O desenho da partida, o "estado ao vivo" (autor, 28/10): uma linha por tipo de fato, atualizada
-//! no lugar, com quantas vezes veio, há quanto tempo e o último valor; a linha que acabou de mudar
-//! sai marcada. Não rola sozinho, então fica calmo mesmo com 50 fatos por segundo. As cores vêm de
-//! `tema`.
+//! The running game's drawing, the "live state" (author, 28/10): one line per fact type, updated
+//! in place, with how many times it came, how long ago and the last value; the line that just
+//! changed is marked. It does not scroll by itself, so it stays calm even at 50 facts per second.
+//! The colors come from `theme`.
 
 use std::time::Duration;
 
@@ -13,156 +13,151 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
 use super::formatting;
-use super::theme::{self, apagado, atalho};
-use crate::facts::{ERRO, Placar, TEXTO, Tipo};
+use super::theme::{self, dimmed, key_hint};
+use crate::facts::{ERROR_KIND, FactKind, Scoreboard, TEXT_KIND};
 
-/// Até quanto tempo depois de chegar a linha sai marcada.
-const RECENTE: Duration = Duration::from_secs(1);
-/// Quantos segundos a faísca do título cobre.
-const JANELAS_DA_FAISCA: usize = 12;
+/// Up to how long after arriving the line is marked.
+const RECENT: Duration = Duration::from_secs(1);
+/// How many seconds the title's sparkline covers.
+const SPARKLINE_WINDOWS: usize = 12;
 
-pub struct VistaPartida<'a> {
-    pub nome: &'a str,
-    pub placar: &'a Placar,
-    /// Desde que o jogo subiu.
-    pub agora: Duration,
-    /// Quantos tipos pular do alto, com as setas.
-    pub rolagem: usize,
+pub struct LiveView<'a> {
+    pub name: &'a str,
+    pub scoreboard: &'a Scoreboard,
+    /// Since the game started.
+    pub elapsed: Duration,
+    /// How many types to skip from the top, with the arrows.
+    pub scroll: usize,
 }
 
-pub fn desenha(frame: &mut Frame, vista: &VistaPartida) {
+pub fn draw_live(frame: &mut Frame, view: &LiveView) {
     let area = frame.area();
-    let titulo = Line::from(vec![
-        theme::etiqueta(format!(" {} ", vista.nome)),
-        Span::raw(format!(
-            "· jogando há {} ",
-            formatting::relogio(vista.agora)
-        )),
+    let title = Line::from(vec![
+        theme::tag(format!(" {} ", view.name)),
+        Span::raw(format!("· jogando há {} ", formatting::clock(view.elapsed))),
     ]);
-    let fora = theme::bloco_de_fora()
-        .title(titulo)
-        .title_top(fatos_e_faisca(vista).right_aligned());
-    let dentro = fora.inner(area);
-    frame.render_widget(fora, area);
-    let rodape = rodape(vista.placar);
-    let [meio, baixo] =
-        Layout::vertical([Constraint::Min(2), Constraint::Length(rodape.len() as u16)])
-            .areas(dentro);
-    frame.render_widget(tabela(vista), meio);
-    frame.render_widget(Paragraph::new(rodape), baixo);
-    theme::moldura(frame.buffer_mut(), area);
+    let outer = theme::outer_block()
+        .title(title)
+        .title_top(facts_and_sparkline(view).right_aligned());
+    let inside = outer.inner(area);
+    frame.render_widget(outer, area);
+    let footer = live_footer(view.scoreboard);
+    let [middle, bottom] =
+        Layout::vertical([Constraint::Min(2), Constraint::Length(footer.len() as u16)])
+            .areas(inside);
+    frame.render_widget(facts_table(view), middle);
+    frame.render_widget(Paragraph::new(footer), bottom);
+    theme::paint_border(frame.buffer_mut(), area);
 }
 
-/// Quantos fatos e a faísca do ritmo, cada bloco do anil (pouco) ao magenta (o máximo).
-fn fatos_e_faisca(vista: &VistaPartida) -> Line<'static> {
-    let ritmo = vista.placar.ritmo(vista.agora, JANELAS_DA_FAISCA);
-    let mut partes = vec![Span::raw(format!(" {} fatos ", vista.placar.total()))];
-    partes.extend(formatting::degraus(&ritmo).into_iter().map(|degrau| {
-        let cor = theme::degrade(theme::ANIL, theme::MAGENTA, degrau as f32 / 7.0);
-        Span::raw(formatting::BLOCOS[degrau].to_string()).fg(cor)
+/// How many facts and the rate's sparkline, each block from indigo (few) to magenta (the maximum).
+fn facts_and_sparkline(view: &LiveView) -> Line<'static> {
+    let rate = view.scoreboard.recent_rate(view.elapsed, SPARKLINE_WINDOWS);
+    let mut parts = vec![Span::raw(format!(" {} fatos ", view.scoreboard.total()))];
+    parts.extend(formatting::levels(&rate).into_iter().map(|level| {
+        let color = theme::gradient(theme::INDIGO, theme::MAGENTA, level as f32 / 7.0);
+        Span::raw(formatting::BLOCKS[level].to_string()).fg(color)
     }));
-    partes.push(Span::raw(" "));
-    Line::from(partes)
+    parts.push(Span::raw(" "));
+    Line::from(parts)
 }
 
-fn tabela(vista: &VistaPartida) -> Table<'static> {
-    let cabecalho = Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"])
-        .style(Style::new().bold().fg(theme::APAGADO));
-    let linhas = vista
-        .placar
-        .tipos()
+fn facts_table(view: &LiveView) -> Table<'static> {
+    let header =
+        Row::new([" TIPO", "VEZES", "HÁ", "O ÚLTIMO"]).style(Style::new().bold().fg(theme::DIM));
+    let rows = view
+        .scoreboard
+        .kinds()
         .iter()
-        .skip(vista.rolagem)
-        .map(|tipo| linha(tipo, vista))
+        .skip(view.scroll)
+        .map(|kind| kind_row(kind, view))
         .collect::<Vec<_>>();
-    let larguras = [
+    let widths = [
         Constraint::Length(13),
         Constraint::Length(6),
         Constraint::Length(4),
         Constraint::Min(10),
     ];
-    Table::new(linhas, larguras)
-        .header(cabecalho)
-        .column_spacing(1)
+    Table::new(rows, widths).header(header).column_spacing(1)
 }
 
-/// A linha de um tipo: marcada com `▸` se mudou há menos de `RECENTE`.
-fn linha(tipo: &Tipo, vista: &VistaPartida) -> Row<'static> {
-    let desde = vista.agora.saturating_sub(tipo.ultimo_em);
-    let marca = if desde < RECENTE { "▸" } else { " " };
-    let nome = Line::from(vec![
-        Span::raw(marca).fg(theme::MAGENTA),
-        Span::raw(tipo.nome.clone()).fg(cor_do_tipo(tipo)),
+/// A type's row: marked with `▸` if it changed less than `RECENT` ago.
+fn kind_row(kind: &FactKind, view: &LiveView) -> Row<'static> {
+    let since = view.elapsed.saturating_sub(kind.last_at);
+    let mark = if since < RECENT { "▸" } else { " " };
+    let name = Line::from(vec![
+        Span::raw(mark).fg(theme::MAGENTA),
+        Span::raw(kind.name.clone()).fg(kind_color(kind)),
     ]);
-    let ultimo = if tipo.nome == "CONFIG" {
-        config(vista.placar)
+    let last = if kind.name == "CONFIG" {
+        config_summary(view.scoreboard)
     } else {
-        formatting::resumo(&tipo.campos)
+        formatting::fields_summary(&kind.fields)
     };
-    let celulas = [
-        Cell::from(nome),
-        Cell::from(Line::from(tipo.vezes.to_string()).right_aligned()),
-        Cell::from(formatting::duracao_curta(desde.as_secs())),
-        Cell::from(ultimo),
+    let cells = [
+        Cell::from(name),
+        Cell::from(Line::from(kind.count.to_string()).right_aligned()),
+        Cell::from(formatting::short_duration(since.as_secs())),
+        Cell::from(last),
     ];
-    Row::new(celulas).style(estilo(tipo, desde))
+    Row::new(cells).style(row_style(kind, since))
 }
 
-fn estilo(tipo: &Tipo, desde: Duration) -> Style {
-    match tipo.nome.as_str() {
-        ERRO => Style::new().fg(theme::CORAL),
-        TEXTO => Style::new().fg(theme::APAGADO),
-        _ if desde < RECENTE => Style::new().bold(),
+fn row_style(kind: &FactKind, since: Duration) -> Style {
+    match kind.name.as_str() {
+        ERROR_KIND => Style::new().fg(theme::CORAL),
+        TEXT_KIND => Style::new().fg(theme::DIM),
+        _ if since < RECENT => Style::new().bold(),
         _ => Style::new(),
     }
 }
 
-/// O nome do tipo: em orquídea, menos o `erro` e o `texto`, que ficam com a cor da linha.
-fn cor_do_tipo(tipo: &Tipo) -> Color {
-    match tipo.nome.as_str() {
-        ERRO => theme::CORAL,
-        TEXTO => theme::APAGADO,
-        _ => theme::ORQUIDEA,
+/// The type's name: in orchid, except `erro` and `texto`, which keep the line's color.
+fn kind_color(kind: &FactKind) -> Color {
+    match kind.name.as_str() {
+        ERROR_KIND => theme::CORAL,
+        TEXT_KIND => theme::DIM,
+        _ => theme::ORCHID,
     }
 }
 
-/// O `CONFIG` vem uma vez por chave no boot; o que interessa é o que saiu do padrão.
-fn config(placar: &Placar) -> String {
-    let fora = placar.fora_do_padrao();
-    if fora.is_empty() {
+/// `CONFIG` comes once per key at boot; what matters is what is off the default.
+fn config_summary(scoreboard: &Scoreboard) -> String {
+    let off = scoreboard.off_default();
+    if off.is_empty() {
         return "todas no padrão".to_string();
     }
-    let pares: Vec<String> = fora
+    let pairs: Vec<String> = off
         .iter()
-        .map(|(chave, valor)| format!("{chave} {valor}"))
+        .map(|(key, value)| format!("{key} {value}"))
         .collect();
-    format!("{} fora do padrão: {}", fora.len(), pares.join(", "))
+    format!("{} fora do padrão: {}", off.len(), pairs.join(", "))
 }
 
-fn rodape(placar: &Placar) -> Vec<Line<'static>> {
-    let mut linhas = Vec::new();
-    if let Some(erro) = placar.primeiro_erro() {
-        linhas.push(Line::from(format!(" erro: {erro}")).fg(theme::CORAL));
+fn live_footer(scoreboard: &Scoreboard) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(error) = scoreboard.first_error() {
+        lines.push(Line::from(format!(" erro: {error}")).fg(theme::CORAL));
     }
-    linhas.push(Line::from(vec![
+    lines.push(Line::from(vec![
         Span::raw(" "),
-        atalho("x"),
-        apagado(" encerra o jogo · "),
-        atalho("↑↓"),
-        apagado(" rola · o painel volta quando a janela fechar"),
+        key_hint("x"),
+        dimmed(" encerra o jogo · "),
+        key_hint("↑↓"),
+        dimmed(" rola · o painel volta quando a janela fechar"),
     ]));
-    linhas
+    lines
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
-    use crate::facts::Origem;
-    use crate::panel::{acha, tela_de_teste, texto_da_tela, theme};
+    use crate::facts::Source;
+    use crate::panel::{find_text, screen_text, test_screen, theme};
 
-    fn placar() -> Placar {
-        let mut placar = Placar::novo("CampCrawler");
-        let linhas = [
+    fn scoreboard() -> Scoreboard {
+        let mut scoreboard = Scoreboard::new("CampCrawler");
+        let lines = [
             (
                 0.1,
                 "CAMPCRAWLER PARTIDA semente=1 idioma=pt_BR ritmo=normal",
@@ -179,26 +174,26 @@ mod testes {
             (120.0, "CAMPCRAWLER VEZ soldado=1 texto=1º"),
             (133.8, "CAMPCRAWLER VEZ soldado=2 texto=2º marcado=sim"),
         ];
-        for (segundos, linha) in linhas {
-            placar.anota(Origem::Saida, linha, Duration::from_secs_f64(segundos));
+        for (seconds, line) in lines {
+            scoreboard.record(Source::Stdout, line, Duration::from_secs_f64(seconds));
         }
-        placar
+        scoreboard
     }
 
-    fn vista(placar: &Placar) -> VistaPartida<'_> {
-        VistaPartida {
-            nome: "CampCrawler",
-            placar,
-            agora: Duration::from_secs_f64(134.2),
-            rolagem: 0,
+    fn view(scoreboard: &Scoreboard) -> LiveView<'_> {
+        LiveView {
+            name: "CampCrawler",
+            scoreboard,
+            elapsed: Duration::from_secs_f64(134.2),
+            scroll: 0,
         }
     }
 
     #[test]
-    fn partida_mostra_cada_tipo_e_marca_o_que_acabou_de_mudar() {
-        let placar = placar();
-        let texto = texto_da_tela(80, 12, |frame| desenha(frame, &vista(&placar)));
-        for esperado in [
+    fn the_live_screen_shows_each_type_and_marks_what_just_changed() {
+        let scoreboard = scoreboard();
+        let text = screen_text(80, 12, |frame| draw_live(frame, &view(&scoreboard)));
+        for expected in [
             "CampCrawler · jogando há 02:14",
             "6 fatos",
             "TIPO",
@@ -209,53 +204,57 @@ mod testes {
             "soldado 2 · texto 2º · marcado sim",
             "x encerra o jogo",
         ] {
-            assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
         assert!(
-            !texto.contains("▸MAPA"),
-            "o MAPA não muda há 2 min\n{texto}"
+            !text.contains("▸MAPA"),
+            "MAPA has not changed for 2 min\n{text}"
         );
-        let vez = texto.lines().find(|linha| linha.contains("▸VEZ")).unwrap();
-        assert!(vez.contains(" 2 ") && vez.contains("0s"), "{vez}");
+        let turn = text.lines().find(|line| line.contains("▸VEZ")).unwrap();
+        assert!(turn.contains(" 2 ") && turn.contains("0s"), "{turn}");
     }
 
     #[test]
-    fn partida_pinta_a_etiqueta_a_marca_e_a_faisca() {
-        let placar = placar();
-        let pintada = tela_de_teste(80, 12, |frame| desenha(frame, &vista(&placar)));
-        let cor = |texto: &str| {
-            let (x, y) = acha(&pintada, texto);
-            (pintada[(x, y)].fg, pintada[(x, y)].bg)
+    fn the_live_screen_paints_the_tag_the_mark_and_the_sparkline() {
+        let scoreboard = scoreboard();
+        let painted = test_screen(80, 12, |frame| draw_live(frame, &view(&scoreboard)));
+        let color = |text: &str| {
+            let (x, y) = find_text(&painted, text);
+            (painted[(x, y)].fg, painted[(x, y)].bg)
         };
-        assert_eq!(cor("CampCrawler"), (theme::NOITE, theme::MAGENTA));
-        assert_eq!(pintada[(0, 0)].fg, theme::ANIL, "a moldura em degradê");
+        assert_eq!(color("CampCrawler"), (theme::NIGHT, theme::MAGENTA));
         assert_eq!(
-            cor("▸VEZ").0,
-            theme::MAGENTA,
-            "a marca do que acabou de mudar"
+            painted[(0, 0)].fg,
+            theme::INDIGO,
+            "the border in a gradient"
         );
-        assert_eq!(cor("VEZ ").0, theme::ORQUIDEA, "o tipo");
-        // A faísca vai do anil, no bloco baixo, ao magenta, no alto.
-        assert_eq!(cor("▁").0, theme::ANIL);
-        assert_eq!(cor("█").0, theme::MAGENTA);
+        assert_eq!(
+            color("▸VEZ").0,
+            theme::MAGENTA,
+            "the mark of what just changed"
+        );
+        assert_eq!(color("VEZ ").0, theme::ORCHID, "the type");
+        // The sparkline goes from indigo, on the low block, to magenta, on the high one.
+        assert_eq!(color("▁").0, theme::INDIGO);
+        assert_eq!(color("█").0, theme::MAGENTA);
     }
 
     #[test]
-    fn partida_rola_e_mostra_o_primeiro_erro() {
-        let mut placar = placar();
-        placar.anota(
-            Origem::Erro,
+    fn the_live_screen_scrolls_and_shows_the_first_error() {
+        let mut scoreboard = scoreboard();
+        scoreboard.record(
+            Source::Stderr,
             "Error: Could not initialize SDL video subsystem",
             Duration::from_secs(134),
         );
-        let mut vista = vista(&placar);
-        vista.rolagem = 1;
-        let texto = texto_da_tela(80, 12, |frame| desenha(frame, &vista));
-        assert!(!texto.contains("PARTIDA"), "rolou um\n{texto}");
-        assert!(texto.contains("CONFIG"), "{texto}");
+        let mut view = view(&scoreboard);
+        view.scroll = 1;
+        let text = screen_text(80, 12, |frame| draw_live(frame, &view));
+        assert!(!text.contains("PARTIDA"), "scrolled by one\n{text}");
+        assert!(text.contains("CONFIG"), "{text}");
         assert!(
-            texto.contains("erro: Error: Could not initialize SDL"),
-            "{texto}"
+            text.contains("erro: Error: Could not initialize SDL"),
+            "{text}"
         );
     }
 }

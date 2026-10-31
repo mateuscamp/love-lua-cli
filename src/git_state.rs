@@ -1,223 +1,228 @@
-//! O git da pasta de cada jogo: a branch, as mudanças sem commit e o último commit.
+//! The git of each game's folder: the branch, the uncommitted changes and the last commit.
 //!
-//! O lançador abre o jogo como ele está na pasta; quando alguém trabalha nela, é essa obra que
-//! abre, não o principal, e o painel mostra isso (autor, 28/10). As pastas de `~/lua` são de
-//! outras sessões, trabalhando ali agora: daqui só se lê, sem os locks opcionais do git.
+//! The launcher opens the game as it is in the folder; when someone is working there, that work in
+//! progress is what opens, not the main branch, and the panel shows it (author, 28/10). The folders
+//! in `~/lua` belong to other sessions, working there right now: from here they are only read,
+//! without git's optional locks.
 
 use std::path::Path;
 use std::process::Command;
 
-/// O estado git da pasta de um jogo.
+/// The git state of a game's folder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Repo {
-    /// A branch; `None` com o HEAD solto.
-    pub ramo: Option<String>,
-    /// O ramo principal: o que o `origin/HEAD` aponta, ou `main`.
-    pub principal: String,
-    /// O commit do HEAD, em 7 caracteres (vazio num repositório sem commit).
+    /// The branch; `None` with a detached HEAD.
+    pub branch: Option<String>,
+    /// The main branch: what `origin/HEAD` points to, or `main`.
+    pub main_branch: String,
+    /// The HEAD commit, in 7 characters (empty in a repository with no commit).
     pub commit: String,
-    /// Mudanças sem commit, contando os arquivos novos.
-    pub mudancas: usize,
-    pub ultimo: Option<Commit>,
+    /// Uncommitted changes, counting new files.
+    pub changes: usize,
+    pub last_commit: Option<Commit>,
 }
 
-/// O último commit do HEAD.
+/// The last commit of HEAD.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Commit {
-    /// Segundos Unix do commit (`%ct`).
-    pub quando: i64,
-    pub assunto: String,
+    /// Unix seconds of the commit (`%ct`).
+    pub timestamp: i64,
+    pub subject: String,
 }
 
-/// A saída do `git` rodado em `pasta`, ou `None` se ele não rodou ou falhou. Sem os locks
-/// opcionais: o `status` não reescreve o índice de uma pasta onde alguém pode estar trabalhando.
-fn git(pasta: &Path, argumentos: &[&str]) -> Option<String> {
-    let saida = Command::new("git")
+/// The output of `git` run in `folder`, or `None` if it did not run or failed. Without the optional
+/// locks: `status` does not rewrite the index of a folder where someone may be working.
+fn git_output(folder: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
         .arg("-C")
-        .arg(pasta)
+        .arg(folder)
         .arg("--no-optional-locks")
-        .args(argumentos)
+        .args(args)
         .output()
         .ok()?;
-    if !saida.status.success() {
+    if !output.status.success() {
         return None;
     }
-    String::from_utf8(saida.stdout).ok()
+    String::from_utf8(output.stdout).ok()
 }
 
-/// O ramo principal do repositório em `pasta`.
-fn principal(pasta: &Path) -> String {
-    let origem = git(
-        pasta,
+/// The main branch of the repository in `folder`.
+fn main_branch_of(folder: &Path) -> String {
+    let origin = git_output(
+        folder,
         &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"],
     );
-    origem
+    origin
         .as_deref()
-        .and_then(|ramo| ramo.trim().strip_prefix("origin/"))
+        .and_then(|branch| branch.trim().strip_prefix("origin/"))
         .unwrap_or("main")
         .to_string()
 }
 
-/// Branch (`None` com o HEAD solto), commit e mudanças, da saída de
+/// Branch (`None` with a detached HEAD), commit and changes, from the output of
 /// `git status --porcelain=v2 --branch`.
-fn le_status(estado: &str) -> (Option<String>, String, usize) {
-    let (mut ramo, mut commit, mut mudancas) = (None, "", 0);
-    for linha in estado.lines() {
-        if let Some(valor) = linha.strip_prefix("# branch.head ") {
-            ramo = Some(valor);
-        } else if let Some(valor) = linha.strip_prefix("# branch.oid ") {
-            commit = valor;
-        } else if !linha.starts_with('#') {
-            mudancas += 1;
+fn parse_status(status: &str) -> (Option<String>, String, usize) {
+    let (mut branch, mut commit, mut changes) = (None, "", 0);
+    for line in status.lines() {
+        if let Some(value) = line.strip_prefix("# branch.head ") {
+            branch = Some(value);
+        } else if let Some(value) = line.strip_prefix("# branch.oid ") {
+            commit = value;
+        } else if !line.starts_with('#') {
+            changes += 1;
         }
     }
-    let ramo = ramo
-        .filter(|ramo| *ramo != "(detached)")
+    let branch = branch
+        .filter(|branch| *branch != "(detached)")
         .map(str::to_string);
     let commit = commit.get(..7).unwrap_or(commit).to_string();
-    (ramo, commit, mudancas)
+    (branch, commit, changes)
 }
 
-/// O último commit do HEAD; `None` num repositório sem commit.
-fn ultimo(pasta: &Path) -> Option<Commit> {
-    let saida = git(pasta, &["log", "-1", "--format=%ct%x1f%s"])?;
-    let (quando, assunto) = saida.trim_end().split_once('\x1f')?;
+/// The last commit of HEAD; `None` in a repository with no commit.
+fn read_last_commit(folder: &Path) -> Option<Commit> {
+    let output = git_output(folder, &["log", "-1", "--format=%ct%x1f%s"])?;
+    let (timestamp, subject) = output.trim_end().split_once('\x1f')?;
     Some(Commit {
-        quando: quando.parse().ok()?,
-        assunto: assunto.to_string(),
+        timestamp: timestamp.parse().ok()?,
+        subject: subject.to_string(),
     })
 }
 
-/// O estado git da pasta, ou `None` quando ela não é repositório ou o git não responde.
-pub fn repo(pasta: &Path) -> Option<Repo> {
-    let estado = git(pasta, &["status", "--porcelain=v2", "--branch"])?;
-    let (ramo, commit, mudancas) = le_status(&estado);
+/// The folder's git state, or `None` when it is not a repository or git does not answer.
+pub fn read_repo(folder: &Path) -> Option<Repo> {
+    let status = git_output(folder, &["status", "--porcelain=v2", "--branch"])?;
+    let (branch, commit, changes) = parse_status(&status);
     Some(Repo {
-        ramo,
-        principal: principal(pasta),
+        branch,
+        main_branch: main_branch_of(folder),
         commit,
-        mudancas,
-        ultimo: ultimo(pasta),
+        changes,
+        last_commit: read_last_commit(folder),
     })
 }
 
 impl Repo {
-    /// A branch fora do principal, ou o HEAD solto, como o painel mostra.
-    pub fn desvio(&self) -> Option<String> {
-        match &self.ramo {
+    /// The branch off the main one, or the detached HEAD, as the panel shows it.
+    pub fn off_main(&self) -> Option<String> {
+        match &self.branch {
             None => Some(format!("HEAD solto em {}", self.commit)),
-            Some(ramo) if *ramo != self.principal => Some(format!("branch {ramo}")),
+            Some(branch) if *branch != self.main_branch => Some(format!("branch {branch}")),
             Some(_) => None,
         }
     }
 
-    /// As mudanças sem commit por extenso, ou `None` sem nenhuma.
-    pub fn mudancas_por_extenso(&self) -> Option<String> {
-        match self.mudancas {
+    /// The uncommitted changes in words, or `None` with none.
+    pub fn changes_in_words(&self) -> Option<String> {
+        match self.changes {
             0 => None,
             1 => Some("1 mudança sem commit".to_string()),
             n => Some(format!("{n} mudanças sem commit")),
         }
     }
 
-    /// O que a pasta tem fora do ramo principal: a branch, se não for a principal, e as mudanças
-    /// sem commit. `None` com a pasta limpa no principal.
-    pub fn obra(&self) -> Option<String> {
-        let partes: Vec<String> = [self.desvio(), self.mudancas_por_extenso()]
+    /// What the folder has off the main branch: the branch, if it is not the main one, and the
+    /// uncommitted changes. `None` with a clean folder on the main branch.
+    pub fn work_in_progress(&self) -> Option<String> {
+        let parts: Vec<String> = [self.off_main(), self.changes_in_words()]
             .into_iter()
             .flatten()
             .collect();
-        (!partes.is_empty()).then(|| partes.join(", "))
+        (!parts.is_empty()).then(|| parts.join(", "))
     }
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
-    use crate::test_support::{git_teste, pasta_de_teste};
+    use crate::test_support::{test_folder, test_git};
 
-    fn obra(pasta: &Path) -> Option<String> {
-        repo(pasta)?.obra()
+    fn wip(folder: &Path) -> Option<String> {
+        read_repo(folder)?.work_in_progress()
     }
 
     #[test]
-    fn obra_marca_branch_fora_do_principal_e_mudancas_sem_commit() {
-        let raiz = pasta_de_teste("obra");
-        let jogo = raiz.join("jogo");
-        std::fs::create_dir(&jogo).unwrap();
-        assert_eq!(obra(&jogo), None, "pasta sem git");
+    fn work_in_progress_marks_a_branch_off_main_and_uncommitted_changes() {
+        let root = test_folder("wip");
+        let game = root.join("game");
+        std::fs::create_dir(&game).unwrap();
+        assert_eq!(wip(&game), None, "folder without git");
 
-        git_teste(&jogo, &["init", "-q", "-b", "main"]);
-        std::fs::write(jogo.join("main.lua"), "-- jogo\n").unwrap();
-        git_teste(&jogo, &["add", "."]);
-        git_teste(&jogo, &["commit", "-q", "-m", "um"]);
-        assert_eq!(obra(&jogo), None, "limpa no main");
+        test_git(&game, &["init", "-q", "-b", "main"]);
+        std::fs::write(game.join("main.lua"), "-- game\n").unwrap();
+        test_git(&game, &["add", "."]);
+        test_git(&game, &["commit", "-q", "-m", "one"]);
+        assert_eq!(wip(&game), None, "clean on main");
 
-        std::fs::write(jogo.join("main.lua"), "-- jogo mudado\n").unwrap();
-        assert_eq!(obra(&jogo).as_deref(), Some("1 mudança sem commit"));
-        std::fs::write(jogo.join("novo.lua"), "-- novo\n").unwrap();
-        assert_eq!(obra(&jogo).as_deref(), Some("2 mudanças sem commit"));
+        std::fs::write(game.join("main.lua"), "-- game changed\n").unwrap();
+        assert_eq!(wip(&game).as_deref(), Some("1 mudança sem commit"));
+        std::fs::write(game.join("new.lua"), "-- new\n").unwrap();
+        assert_eq!(wip(&game).as_deref(), Some("2 mudanças sem commit"));
 
-        git_teste(&jogo, &["checkout", "-q", "-b", "r0-pendencias"]);
+        test_git(&game, &["checkout", "-q", "-b", "r0-pendencias"]);
         assert_eq!(
-            obra(&jogo).as_deref(),
+            wip(&game).as_deref(),
             Some("branch r0-pendencias, 2 mudanças sem commit")
         );
-        git_teste(&jogo, &["add", "."]);
-        git_teste(&jogo, &["commit", "-q", "-m", "dois"]);
-        assert_eq!(obra(&jogo).as_deref(), Some("branch r0-pendencias"));
+        test_git(&game, &["add", "."]);
+        test_git(&game, &["commit", "-q", "-m", "two"]);
+        assert_eq!(wip(&game).as_deref(), Some("branch r0-pendencias"));
 
-        git_teste(&jogo, &["checkout", "-q", "--detach"]);
-        let solto = obra(&jogo).unwrap();
-        assert!(solto.starts_with("HEAD solto em "), "{solto}");
-        assert_eq!(solto.len(), "HEAD solto em ".len() + 7, "{solto}");
+        test_git(&game, &["checkout", "-q", "--detach"]);
+        let detached = wip(&game).unwrap();
+        assert!(detached.starts_with("HEAD solto em "), "{detached}");
+        assert_eq!(detached.len(), "HEAD solto em ".len() + 7, "{detached}");
 
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn obra_le_o_principal_do_origin_head() {
-        let raiz = pasta_de_teste("principal");
-        let origem = raiz.join("origem");
-        std::fs::create_dir(&origem).unwrap();
-        git_teste(&origem, &["init", "-q", "-b", "trunk"]);
-        std::fs::write(origem.join("main.lua"), "-- jogo\n").unwrap();
-        git_teste(&origem, &["add", "."]);
-        git_teste(&origem, &["commit", "-q", "-m", "um"]);
-        git_teste(&raiz, &["clone", "-q", "origem", "jogo"]);
+    fn work_in_progress_reads_the_main_branch_from_origin_head() {
+        let root = test_folder("main-branch");
+        let origin = root.join("origin");
+        std::fs::create_dir(&origin).unwrap();
+        test_git(&origin, &["init", "-q", "-b", "trunk"]);
+        std::fs::write(origin.join("main.lua"), "-- game\n").unwrap();
+        test_git(&origin, &["add", "."]);
+        test_git(&origin, &["commit", "-q", "-m", "one"]);
+        test_git(&root, &["clone", "-q", "origin", "game"]);
 
-        let jogo = raiz.join("jogo");
-        assert_eq!(obra(&jogo), None, "no trunk, que é o principal da origem");
-        git_teste(&jogo, &["checkout", "-q", "-b", "main"]);
-        assert_eq!(obra(&jogo).as_deref(), Some("branch main"));
+        let game = root.join("game");
+        assert_eq!(
+            wip(&game),
+            None,
+            "on trunk, which is the origin's main branch"
+        );
+        test_git(&game, &["checkout", "-q", "-b", "main"]);
+        assert_eq!(wip(&game).as_deref(), Some("branch main"));
 
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn repo_le_o_ultimo_commit() {
-        let jogo = pasta_de_teste("ultimo");
-        git_teste(&jogo, &["init", "-q", "-b", "main"]);
-        assert_eq!(repo(&jogo).unwrap().ultimo, None, "sem commit");
+    fn read_repo_reads_the_last_commit() {
+        let game = test_folder("last-commit");
+        test_git(&game, &["init", "-q", "-b", "main"]);
+        assert_eq!(read_repo(&game).unwrap().last_commit, None, "no commit");
 
-        std::fs::write(jogo.join("main.lua"), "-- jogo\n").unwrap();
-        git_teste(&jogo, &["add", "."]);
-        git_teste(
-            &jogo,
+        std::fs::write(game.join("main.lua"), "-- game\n").unwrap();
+        test_git(&game, &["add", "."]);
+        test_git(
+            &game,
             &["commit", "-q", "-m", "O mostrado acompanha as passagens"],
         );
-        let ultimo = repo(&jogo).unwrap().ultimo.unwrap();
-        assert_eq!(ultimo.assunto, "O mostrado acompanha as passagens");
-        let agora = std::time::SystemTime::now()
+        let last = read_repo(&game).unwrap().last_commit.unwrap();
+        assert_eq!(last.subject, "O mostrado acompanha as passagens");
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
         assert!(
-            (agora - ultimo.quando).abs() < 60,
-            "{} contra {agora}",
-            ultimo.quando
+            (now - last.timestamp).abs() < 60,
+            "{} against {now}",
+            last.timestamp
         );
 
-        std::fs::remove_dir_all(&jogo).unwrap();
+        std::fs::remove_dir_all(&game).unwrap();
     }
 }

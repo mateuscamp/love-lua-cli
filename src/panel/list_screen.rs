@@ -1,6 +1,6 @@
-//! O desenho da lista: os jogos à esquerda, os detalhes do escolhido à direita, a tela X no título
-//! e o recado embaixo. Só desenha; o que mostrar chega pronto em `VistaLista`, e as cores, de
-//! `tema`.
+//! The list's drawing: the games on the left, the chosen one's details on the right, the X display
+//! in the title and the notice at the bottom. It only draws; what to show arrives ready in
+//! `ListView`, and the colors come from `theme`.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,295 +9,297 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::formatting;
-use super::theme::{self, apagado, atalho};
-use crate::games::{Jogo, LANCADOR};
+use super::theme::{self, dimmed, key_hint};
+use crate::games::{Game, LAUNCHER};
 use crate::git_state::Repo;
 
-/// A largura dos rótulos dos detalhes (`lançador  `).
-const ROTULO: usize = 10;
-/// O nome mais curto que a coluna dos jogos considera, para o título dela caber.
-const LARGURA_MINIMA: usize = 4;
+/// The width of the details' labels (`lançador  `).
+const LABEL_WIDTH: usize = 10;
+/// The shortest name the games column considers, so that its title fits.
+const MIN_NAME_WIDTH: usize = 4;
 
-/// O que se sabe de um jogo descoberto.
-pub struct Situacao {
-    pub jogo: Jogo,
-    /// `None` com a pasta sem git, ou com o git que não respondeu.
+/// What is known about a discovered game.
+pub struct GameEntry {
+    pub game: Game,
+    /// `None` with a folder without git, or with a git that did not answer.
     pub repo: Option<Repo>,
-    /// A cópia do lançador comum difere da dos outros jogos (`lancador_comum`).
-    pub destoa: bool,
+    /// The copy of the shared launcher differs from the other games' (`shared_launcher`).
+    pub launcher_differs: bool,
 }
 
-/// A frase da última tentativa: o jogo que fechou, o que não abriu.
-pub struct Recado {
-    pub texto: String,
-    /// Sai em coral: o jogo não abriu ou saiu com erro.
-    pub problema: bool,
+/// The sentence from the last attempt: the game that closed, the one that did not open.
+pub struct Notice {
+    pub text: String,
+    /// Shown in coral: the game did not open or exited with an error.
+    pub is_problem: bool,
 }
 
-pub struct VistaLista<'a> {
-    /// A raiz como o autor a escreve (`~/lua`).
-    pub raiz: &'a str,
-    /// Uma por jogo descoberto, em ordem; vazia quando a raiz não tem jogo.
-    pub situacoes: &'a [Situacao],
-    pub escolhido: usize,
-    pub tela: &'a Result<(), String>,
+pub struct ListView<'a> {
+    /// The root as the author writes it (`~/lua`).
+    pub root: &'a str,
+    /// One per discovered game, in order; empty when the root has no game.
+    pub entries: &'a [GameEntry],
+    pub chosen: usize,
+    pub display_check: &'a Result<(), String>,
     pub display: &'a str,
-    pub recado: Option<&'a Recado>,
-    /// Segundos Unix de agora, para o "há" do último commit.
-    pub agora: i64,
+    pub notice: Option<&'a Notice>,
+    /// Unix seconds now, for the "há" of the last commit.
+    pub now: i64,
 }
 
-pub fn desenha(frame: &mut Frame, vista: &VistaLista) {
+pub fn draw_list(frame: &mut Frame, view: &ListView) {
     let area = frame.area();
-    let fora = theme::bloco_de_fora()
-        .title(theme::etiqueta(" jogar "))
-        .title_top(titulo_da_tela(vista).right_aligned());
-    let dentro = fora.inner(area);
-    frame.render_widget(fora, area);
-    let rodape = rodape(vista);
-    let [paineis, baixo] =
-        Layout::vertical([Constraint::Min(3), Constraint::Length(rodape.len() as u16)])
-            .areas(dentro);
-    let largura = vista
-        .situacoes
+    let outer = theme::outer_block()
+        .title(theme::tag(" jogar "))
+        .title_top(display_title(view).right_aligned());
+    let inside = outer.inner(area);
+    frame.render_widget(outer, area);
+    let footer = list_footer(view);
+    let [panes, bottom] =
+        Layout::vertical([Constraint::Min(3), Constraint::Length(footer.len() as u16)])
+            .areas(inside);
+    let width = view
+        .entries
         .iter()
-        .map(|situacao| situacao.jogo.pasta.chars().count())
+        .map(|entry| entry.game.folder.chars().count())
         .max()
         .unwrap_or(0)
-        // Na lista vazia, ou de nomes curtos, o título ` Jogos ` ainda cabe na moldura.
-        .max(LARGURA_MINIMA) as u16
+        // In the empty list, or one of short names, the ` Jogos ` title still fits in the frame.
+        .max(MIN_NAME_WIDTH) as u16
         + 8;
-    let [esquerda, direita] =
-        Layout::horizontal([Constraint::Length(largura), Constraint::Min(10)]).areas(paineis);
-    desenha_jogos(frame, esquerda, vista);
-    desenha_detalhes(frame, direita, vista);
-    frame.render_widget(Paragraph::new(rodape), baixo);
-    theme::moldura(frame.buffer_mut(), area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Length(width), Constraint::Min(10)]).areas(panes);
+    draw_games(frame, left, view);
+    draw_details(frame, right, view);
+    frame.render_widget(Paragraph::new(footer), bottom);
+    theme::paint_border(frame.buffer_mut(), area);
 }
 
-fn titulo_da_tela(vista: &VistaLista) -> Line<'static> {
-    match vista.tela {
-        Ok(()) => Line::from(format!(" tela X {} ✓ ", vista.display)).fg(theme::CIANO),
+fn display_title(view: &ListView) -> Line<'static> {
+    match view.display_check {
+        Ok(()) => Line::from(format!(" tela X {} ✓ ", view.display)).fg(theme::CYAN),
         Err(_) => Line::from(" sem tela X ").fg(theme::CORAL).bold(),
     }
 }
 
-/// O aviso da tela, o recado e a ajuda das teclas, um por linha.
-fn rodape(vista: &VistaLista) -> Vec<Line<'static>> {
-    let mut linhas = Vec::new();
-    if let Err(aviso) = vista.tela {
-        linhas.push(Line::from(format!(" {aviso}")).fg(theme::CORAL));
+/// The display warning, the notice and the keys' help, one per line.
+fn list_footer(view: &ListView) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Err(warning) = view.display_check {
+        lines.push(Line::from(format!(" {warning}")).fg(theme::CORAL));
     }
-    if let Some(recado) = vista.recado {
-        let cor = if recado.problema {
+    if let Some(notice) = view.notice {
+        let color = if notice.is_problem {
             theme::CORAL
         } else {
-            theme::CIANO
+            theme::CYAN
         };
-        linhas.push(Line::from(format!(" {}", recado.texto)).fg(cor));
+        lines.push(Line::from(format!(" {}", notice.text)).fg(color));
     }
-    linhas.push(Line::from(vec![
+    lines.push(Line::from(vec![
         Span::raw(" "),
-        atalho("↑↓"),
-        apagado(" escolhe   "),
-        atalho("Enter"),
-        apagado(" abre   "),
-        atalho("Esc"),
-        apagado(" sai"),
+        key_hint("↑↓"),
+        dimmed(" escolhe   "),
+        key_hint("Enter"),
+        dimmed(" abre   "),
+        key_hint("Esc"),
+        dimmed(" sai"),
     ]));
-    linhas
+    lines
 }
 
-fn em_obra(situacao: &Situacao) -> bool {
-    situacao
+fn is_in_progress(entry: &GameEntry) -> bool {
+    entry
         .repo
         .as_ref()
-        .is_some_and(|repo| repo.obra().is_some())
+        .is_some_and(|repo| repo.work_in_progress().is_some())
 }
 
-/// A lista dos jogos, com a barra em degradê na linha do escolhido.
-fn desenha_jogos(frame: &mut Frame, area: Rect, vista: &VistaLista) {
-    let itens: Vec<ListItem> = vista
-        .situacoes
+/// The list of games, with the gradient bar on the chosen one's line.
+fn draw_games(frame: &mut Frame, area: Rect, view: &ListView) {
+    let items: Vec<ListItem> = view
+        .entries
         .iter()
-        .map(|situacao| {
-            let mut partes = vec![Span::raw(situacao.jogo.pasta.clone())];
-            if em_obra(situacao) {
-                partes.push(" ●".fg(theme::ORQUIDEA));
+        .map(|entry| {
+            let mut parts = vec![Span::raw(entry.game.folder.clone())];
+            if is_in_progress(entry) {
+                parts.push(" ●".fg(theme::ORCHID));
             }
-            if situacao.destoa {
-                partes.push(" ≠".fg(theme::CORAL));
+            if entry.launcher_differs {
+                parts.push(" ≠".fg(theme::CORAL));
             }
-            ListItem::new(Line::from(partes))
+            ListItem::new(Line::from(parts))
         })
         .collect();
-    let bloco = theme::bloco_de_dentro(" Jogos ".fg(theme::APAGADO).bold());
-    let dentro = bloco.inner(area);
-    let lista = List::new(itens)
-        .block(bloco)
+    let block = theme::inner_block(" Jogos ".fg(theme::DIM).bold());
+    let inside = block.inner(area);
+    let list = List::new(items)
+        .block(block)
         .highlight_symbol(Line::from("▶ ").fg(theme::MAGENTA))
         .highlight_style(Modifier::BOLD);
-    let mut estado = ListState::default().with_selected(Some(vista.escolhido));
-    frame.render_stateful_widget(lista, area, &mut estado);
-    // A lista rola quando não cabe: a barra vai na linha em que o escolhido ficou.
-    let linha = vista.escolhido.saturating_sub(estado.offset()) as u16;
-    if linha < dentro.height {
-        let faixa = Rect::new(dentro.x, dentro.y + linha, dentro.width, 1);
-        theme::barra(frame.buffer_mut(), faixa);
+    let mut state = ListState::default().with_selected(Some(view.chosen));
+    frame.render_stateful_widget(list, area, &mut state);
+    // The list scrolls when it does not fit: the bar goes on the line where the chosen one landed.
+    let line = view.chosen.saturating_sub(state.offset()) as u16;
+    if line < inside.height {
+        let strip = Rect::new(inside.x, inside.y + line, inside.width, 1);
+        theme::paint_bar(frame.buffer_mut(), strip);
     }
 }
 
-fn desenha_detalhes(frame: &mut Frame, area: Rect, vista: &VistaLista) {
-    let Some(situacao) = vista.situacoes.get(vista.escolhido) else {
-        desenha_vazio(frame, area, vista.raiz);
+fn draw_details(frame: &mut Frame, area: Rect, view: &ListView) {
+    let Some(entry) = view.entries.get(view.chosen) else {
+        draw_empty(frame, area, view.root);
         return;
     };
-    let jogo = &situacao.jogo;
-    let mut lancador = vec![Span::raw(LANCADOR.join(" "))];
-    if situacao.destoa {
-        lancador.push(" ≠ difere dos outros jogos".fg(theme::CORAL));
+    let game = &entry.game;
+    let mut launcher = vec![Span::raw(LAUNCHER.join(" "))];
+    if entry.launcher_differs {
+        launcher.push(" ≠ difere dos outros jogos".fg(theme::CORAL));
     }
-    let mut linhas = vec![
-        rotulado("pasta", pasta(vista.raiz, jogo)),
-        rotulado("lançador", lancador),
+    let mut lines = vec![
+        labeled("pasta", folder_spans(view.root, game)),
+        labeled("lançador", launcher),
     ];
-    linhas.extend(git(situacao.repo.as_ref(), vista.agora));
-    let titulo = Span::raw(format!(" {} ", jogo.pasta))
+    lines.extend(git_lines(entry.repo.as_ref(), view.now));
+    let title = Span::raw(format!(" {} ", game.folder))
         .fg(theme::MAGENTA)
         .bold();
-    let bloco = theme::bloco_de_dentro(titulo);
-    frame.render_widget(Paragraph::new(linhas).block(bloco), area);
+    let block = theme::inner_block(title);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// Sem jogo na raiz: onde se procurou e o que faz uma pasta virar jogo.
-fn desenha_vazio(frame: &mut Frame, area: Rect, raiz: &str) {
-    let linhas = vec![
-        Line::from(format!(" nenhum jogo em {raiz}")),
-        Line::from(apagado(format!(
+/// No game in the root: where it looked and what turns a folder into a game.
+fn draw_empty(frame: &mut Frame, area: Rect, root: &str) {
+    let lines = vec![
+        Line::from(format!(" nenhum jogo em {root}")),
+        Line::from(dimmed(format!(
             " um jogo é uma pasta com {} executável",
-            LANCADOR[0]
+            LAUNCHER[0]
         ))),
     ];
-    let bloco = theme::bloco_de_dentro(" jogar ".fg(theme::MAGENTA).bold());
-    frame.render_widget(Paragraph::new(linhas).block(bloco), area);
+    let block = theme::inner_block(" jogar ".fg(theme::MAGENTA).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn rotulado(rotulo: &str, valor: Vec<Span<'static>>) -> Line<'static> {
-    let mut partes = vec![apagado(format!(" {rotulo:<ROTULO$}"))];
-    partes.extend(valor);
-    Line::from(partes)
+fn labeled(label: &str, value: Vec<Span<'static>>) -> Line<'static> {
+    let mut parts = vec![dimmed(format!(" {label:<LABEL_WIDTH$}"))];
+    parts.extend(value);
+    Line::from(parts)
 }
 
-fn pasta(raiz: &str, jogo: &Jogo) -> Vec<Span<'static>> {
-    vec![Span::raw(format!("{raiz}/{}", jogo.pasta))]
+fn folder_spans(root: &str, game: &Game) -> Vec<Span<'static>> {
+    vec![Span::raw(format!("{root}/{}", game.folder))]
 }
 
-/// Branch, mudanças e último commit; o ramo principal em ciano, a obra em orquídea.
-fn git(repo: Option<&Repo>, agora: i64) -> Vec<Line<'static>> {
+/// Branch, changes and last commit; the main branch in cyan, work in progress in orchid.
+fn git_lines(repo: Option<&Repo>, now: i64) -> Vec<Line<'static>> {
     let Some(repo) = repo else {
-        return vec![rotulado("branch", vec![apagado("— sem git")])];
+        return vec![labeled("branch", vec![dimmed("— sem git")])];
     };
-    let nome = match &repo.ramo {
-        Some(ramo) => ramo.clone(),
+    let name = match &repo.branch {
+        Some(branch) => branch.clone(),
         None => format!("HEAD solto em {}", repo.commit),
     };
-    let ramo = if repo.desvio().is_some() {
-        vec![Span::raw(nome), " ● em obra".fg(theme::ORQUIDEA)]
+    let branch = if repo.off_main().is_some() {
+        vec![Span::raw(name), " ● em obra".fg(theme::ORCHID)]
     } else {
-        vec![Span::raw(nome).fg(theme::CIANO)]
+        vec![Span::raw(name).fg(theme::CYAN)]
     };
-    let mudancas = match repo.mudancas_por_extenso() {
-        Some(texto) => Span::raw(texto).fg(theme::ORQUIDEA),
-        None => apagado("nenhuma"),
+    let changes = match repo.changes_in_words() {
+        Some(text) => Span::raw(text).fg(theme::ORCHID),
+        None => dimmed("nenhuma"),
     };
-    let mut linhas = vec![
-        rotulado("branch", ramo),
-        rotulado("mudanças", vec![mudancas]),
+    let mut lines = vec![
+        labeled("branch", branch),
+        labeled("mudanças", vec![changes]),
     ];
-    linhas.extend(ultimo(repo, agora));
-    linhas
+    lines.extend(last_commit_lines(repo, now));
+    lines
 }
 
-fn ultimo(repo: &Repo, agora: i64) -> Vec<Line<'static>> {
-    let Some(commit) = &repo.ultimo else {
-        return vec![rotulado("último", vec![apagado("—")])];
+fn last_commit_lines(repo: &Repo, now: i64) -> Vec<Line<'static>> {
+    let Some(commit) = &repo.last_commit else {
+        return vec![labeled("último", vec![dimmed("—")])];
     };
-    let ha = formatting::duracao_curta((agora - commit.quando).max(0) as u64);
+    let ago = formatting::short_duration((now - commit.timestamp).max(0) as u64);
     vec![
-        rotulado(
+        labeled(
             "último",
-            vec![Span::raw(format!("{} · há {ha}", repo.commit))],
+            vec![Span::raw(format!("{} · há {ago}", repo.commit))],
         ),
-        rotulado("", vec![apagado(commit.assunto.clone())]),
+        labeled("", vec![dimmed(commit.subject.clone())]),
     ]
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
     use crate::git_state::Commit;
-    use crate::panel::{acha, tela_de_teste, texto_da_tela, theme};
+    use crate::panel::{find_text, screen_text, test_screen, theme};
 
-    const AGORA: i64 = 1_793_200_000;
+    const NOW: i64 = 1_793_200_000;
 
-    fn situacoes() -> Vec<Situacao> {
-        let limpo = Repo {
-            ramo: Some("main".to_string()),
-            principal: "main".to_string(),
+    fn entries() -> Vec<GameEntry> {
+        let clean = Repo {
+            branch: Some("main".to_string()),
+            main_branch: "main".to_string(),
             commit: "a988f4e".to_string(),
-            mudancas: 0,
-            ultimo: None,
+            changes: 0,
+            last_commit: None,
         };
-        let em_obra = Repo {
-            ramo: Some("r0-pendencias".to_string()),
+        let in_progress = Repo {
+            branch: Some("r0-pendencias".to_string()),
             commit: "48f0ad1".to_string(),
-            mudancas: 5,
-            ultimo: Some(Commit {
-                quando: AGORA - 12 * 60,
-                assunto: "O mostrado acompanha as passagens".to_string(),
+            changes: 5,
+            last_commit: Some(Commit {
+                timestamp: NOW - 12 * 60,
+                subject: "O mostrado acompanha as passagens".to_string(),
             }),
-            ..limpo.clone()
+            ..clean.clone()
         };
-        let jogo = |pasta: &str| Jogo {
-            pasta: pasta.to_string(),
+        let game = |folder: &str| Game {
+            folder: folder.to_string(),
         };
         vec![
-            Situacao {
-                jogo: jogo("bomberboom"),
-                repo: Some(limpo),
-                destoa: false,
+            GameEntry {
+                game: game("bomberboom"),
+                repo: Some(clean),
+                launcher_differs: false,
             },
-            Situacao {
-                jogo: jogo("boomlitude"),
-                repo: Some(em_obra),
-                destoa: false,
+            GameEntry {
+                game: game("boomlitude"),
+                repo: Some(in_progress),
+                launcher_differs: false,
             },
-            Situacao {
-                jogo: jogo("campcrawler"),
+            GameEntry {
+                game: game("campcrawler"),
                 repo: None,
-                destoa: true,
+                launcher_differs: true,
             },
         ]
     }
 
-    fn vista<'a>(situacoes: &'a [Situacao], tela: &'a Result<(), String>) -> VistaLista<'a> {
-        VistaLista {
-            raiz: "~/lua",
-            situacoes,
-            escolhido: 1,
-            tela,
+    fn view<'a>(entries: &'a [GameEntry], display_check: &'a Result<(), String>) -> ListView<'a> {
+        ListView {
+            root: "~/lua",
+            entries,
+            chosen: 1,
+            display_check,
             display: ":0",
-            recado: None,
-            agora: AGORA,
+            notice: None,
+            now: NOW,
         }
     }
 
     #[test]
-    fn lista_marca_a_obra_e_detalha_o_escolhido() {
-        let situacoes = situacoes();
-        let tela = Ok(());
-        let texto = texto_da_tela(80, 14, |frame| desenha(frame, &vista(&situacoes, &tela)));
-        for esperado in [
+    fn the_list_marks_work_in_progress_and_details_the_chosen_one() {
+        let entries = entries();
+        let display_check = Ok(());
+        let text = screen_text(80, 14, |frame| {
+            draw_list(frame, &view(&entries, &display_check))
+        });
+        for expected in [
             "jogar",
             "tela X :0 ✓",
             "▶ boomlitude ●",
@@ -310,95 +312,108 @@ mod testes {
             "O mostrado acompanha",
             "↑↓ escolhe",
         ] {
-            assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
-        assert!(!texto.contains("bomberboom ●"), "{texto}");
+        assert!(!text.contains("bomberboom ●"), "{text}");
         assert!(
-            texto.contains("campcrawler ≠"),
-            "o que destoa, na lista: {texto}"
+            text.contains("campcrawler ≠"),
+            "the one that differs, in the list: {text}"
         );
-        assert!(!texto.contains("difere"), "o escolhido não destoa: {texto}");
+        assert!(
+            !text.contains("difere"),
+            "the chosen one does not differ: {text}"
+        );
     }
 
     #[test]
-    fn lista_pinta_em_anil_e_magenta() {
-        let situacoes = situacoes();
-        let tela = Ok(());
-        let pintada = tela_de_teste(80, 14, |frame| desenha(frame, &vista(&situacoes, &tela)));
-        assert_eq!(pintada[(60, 9)].bg, theme::NOITE, "o fundo é a noite anil");
-        let cantos = (pintada[(0, 0)].fg, pintada[(79, 13)].fg);
+    fn the_list_paints_in_indigo_and_magenta() {
+        let entries = entries();
+        let display_check = Ok(());
+        let painted = test_screen(80, 14, |frame| {
+            draw_list(frame, &view(&entries, &display_check))
+        });
         assert_eq!(
-            cantos,
-            (theme::ANIL, theme::MAGENTA),
-            "a moldura em degradê"
+            painted[(60, 9)].bg,
+            theme::NIGHT,
+            "the background is the indigo night"
         );
-        let cor = |texto: &str| {
-            let (x, y) = acha(&pintada, texto);
-            (pintada[(x, y)].fg, pintada[(x, y)].bg)
+        let corners = (painted[(0, 0)].fg, painted[(79, 13)].fg);
+        assert_eq!(
+            corners,
+            (theme::INDIGO, theme::MAGENTA),
+            "the border in a gradient"
+        );
+        let color = |text: &str| {
+            let (x, y) = find_text(&painted, text);
+            (painted[(x, y)].fg, painted[(x, y)].bg)
         };
         assert_eq!(
-            cor("jogar"),
-            (theme::NOITE, theme::MAGENTA),
-            "o título é etiqueta"
+            color("jogar"),
+            (theme::NIGHT, theme::MAGENTA),
+            "the title is a tag"
         );
-        assert_eq!(cor("✓"), (theme::CIANO, theme::NOITE));
-        assert_eq!(cor("▶ boomlitude"), (theme::MAGENTA, theme::BARRA.0));
-        assert_eq!(cor("●").0, theme::ORQUIDEA, "a marca da obra na lista");
-        assert_eq!(cor("● em obra").0, theme::ORQUIDEA);
-        assert_eq!(cor("≠").0, theme::CORAL, "o lançador que destoa");
-        assert_eq!(cor("Enter").0, theme::MAGENTA, "a tecla da ajuda");
+        assert_eq!(color("✓"), (theme::CYAN, theme::NIGHT));
+        assert_eq!(color("▶ boomlitude"), (theme::MAGENTA, theme::BAR.0));
+        assert_eq!(
+            color("●").0,
+            theme::ORCHID,
+            "the work-in-progress mark in the list"
+        );
+        assert_eq!(color("● em obra").0, theme::ORCHID);
+        assert_eq!(color("≠").0, theme::CORAL, "the launcher that differs");
+        assert_eq!(color("Enter").0, theme::MAGENTA, "the help's key");
     }
 
-    /// No terminal baixo a lista rola, e a barra vai com o escolhido.
+    /// In a short terminal the list scrolls, and the bar goes with the chosen one.
     #[test]
-    fn a_barra_acompanha_a_lista_que_rolou() {
-        let situacoes = situacoes();
-        let tela = Ok(());
-        let mut ultima = vista(&situacoes, &tela);
-        ultima.escolhido = 2;
-        let pintada = tela_de_teste(80, 7, |frame| desenha(frame, &ultima));
-        let (x, y) = acha(&pintada, "▶ campcrawler");
-        assert_eq!(pintada[(x, y)].bg, theme::BARRA.0);
+    fn the_bar_follows_the_list_that_scrolled() {
+        let entries = entries();
+        let display_check = Ok(());
+        let mut last = view(&entries, &display_check);
+        last.chosen = 2;
+        let painted = test_screen(80, 7, |frame| draw_list(frame, &last));
+        let (x, y) = find_text(&painted, "▶ campcrawler");
+        assert_eq!(painted[(x, y)].bg, theme::BAR.0);
     }
 
-    /// O escolhido cujo lançador destoa diz isso nos detalhes, em coral.
+    /// The chosen one whose launcher differs says so in the details, in coral.
     #[test]
-    fn lista_sem_tela_avisa_e_mostra_o_lancador_que_destoa() {
-        let situacoes = situacoes();
-        let tela = Err("sem tela X: ninguém atende no DISPLAY=\":77\"".to_string());
-        let recado = Recado {
-            texto: "Boomlitude saiu com 1 depois de 00:03".to_string(),
-            problema: true,
+    fn the_list_without_a_display_warns_and_shows_the_launcher_that_differs() {
+        let entries = entries();
+        let display_check = Err("sem tela X: ninguém atende no DISPLAY=\":77\"".to_string());
+        let notice = Notice {
+            text: "Boomlitude saiu com 1 depois de 00:03".to_string(),
+            is_problem: true,
         };
-        let mut vista = vista(&situacoes, &tela);
-        vista.escolhido = 2;
-        vista.recado = Some(&recado);
-        let texto = texto_da_tela(100, 14, |frame| desenha(frame, &vista));
-        for esperado in [
+        let mut view = view(&entries, &display_check);
+        view.chosen = 2;
+        view.notice = Some(&notice);
+        let text = screen_text(100, 14, |frame| draw_list(frame, &view));
+        for expected in [
             "sem tela X",
             "ninguém atende no DISPLAY=\":77\"",
             "lançador  tools/love . ≠ difere dos outros jogos",
             "— sem git",
             "Boomlitude saiu com 1",
         ] {
-            assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
-        assert!(!texto.contains("✓"), "{texto}");
+        assert!(!text.contains("✓"), "{text}");
     }
 
-    /// Raiz sem jogo: os detalhes dizem onde se procurou e o que é um jogo.
+    /// A root with no game: the details say where it looked and what a game is.
     #[test]
-    fn lista_vazia_diz_onde_procurou_e_o_que_e_um_jogo() {
-        let tela = Ok(());
-        let mut vazia = vista(&[], &tela);
-        vazia.escolhido = 0;
-        let texto = texto_da_tela(100, 12, |frame| desenha(frame, &vazia));
-        for esperado in [
+    fn the_empty_list_says_where_it_looked_and_what_a_game_is() {
+        let display_check = Ok(());
+        let mut empty = view(&[], &display_check);
+        empty.chosen = 0;
+        let text = screen_text(100, 12, |frame| draw_list(frame, &empty));
+        for expected in [
             "╭ Jogos ",
             "nenhum jogo em ~/lua",
             "um jogo é uma pasta com tools/love executável",
         ] {
-            assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
     }
 }

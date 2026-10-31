@@ -1,200 +1,206 @@
-//! O que o jogo escreve enquanto roda, para o painel mostrar.
+//! What the game writes while it runs, for the panel to show.
 //!
-//! Os jogos escrevem fatos de uma linha, `<JOGO> <TIPO> chave=valor ...` (o JOGO é a pasta em
-//! maiúsculas; regra do README), com o stdout em modo de linha (`io.stdout:setvbuf("line")` no topo do `conf.lua` de
-//! cada um), então cada fato chega ao vivo pelo cano. O formato é dos jogos; aqui só se lê. O que
-//! não é fato (um traceback, um aviso do LÖVE) vira o tipo `texto` ou, do stderr, `erro`.
+//! The games write one-line facts, `<GAME> <TYPE> key=value ...` (GAME is the folder in uppercase;
+//! a README rule), with stdout line-buffered (`io.stdout:setvbuf("line")` at the top of each one's
+//! `conf.lua`), so each fact arrives live through the pipe. The format belongs to the games; here
+//! it is only read. What is not a fact (a traceback, a LÖVE warning) becomes the `texto` type or,
+//! from stderr, `erro`.
 
 use std::time::Duration;
 
-/// De qual cano a linha veio.
+/// Which pipe the line came from.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Origem {
-    Saida,
-    Erro,
+pub enum Source {
+    Stdout,
+    Stderr,
 }
 
-/// Uma linha do jogo, lida.
+/// A line from the game, parsed.
 #[derive(Debug, PartialEq)]
-pub enum Linha {
-    Fato {
-        tipo: String,
-        campos: Vec<(String, String)>,
+pub enum GameLine {
+    Fact {
+        kind: String,
+        fields: Vec<(String, String)>,
     },
-    Texto(String),
+    Text(String),
 }
 
-/// O tipo das linhas soltas do stdout e do stderr; em minúsculas, para não colidir com os tipos
-/// dos jogos, que são em maiúsculas.
-pub const TEXTO: &str = "texto";
-pub const ERRO: &str = "erro";
+/// The type of the loose lines from stdout and stderr; in lowercase, so as not to collide with the
+/// games' types, which are in uppercase.
+pub const TEXT_KIND: &str = "texto";
+pub const ERROR_KIND: &str = "erro";
 
-/// Lê uma linha do jogo: é fato se começa pelo `prefixo` (o nome do jogo em maiúsculas) seguido de
-/// um tipo em maiúsculas; o resto é texto solto. Palavra sem `=` vira campo sem chave.
-pub fn le_linha(prefixo: &str, linha: &str) -> Linha {
-    let linha = linha.trim_end_matches(['\n', '\r']);
-    let mut palavras = linha.split_whitespace();
-    let (Some(jogo), Some(tipo)) = (palavras.next(), palavras.next()) else {
-        return Linha::Texto(linha.to_string());
+/// Parses a line from the game: it is a fact if it starts with `prefix` (the game's name in
+/// uppercase) followed by a type in uppercase; the rest is loose text. A word without `=` becomes a
+/// field without a key.
+pub fn parse_line(prefix: &str, line: &str) -> GameLine {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let mut words = line.split_whitespace();
+    let (Some(game), Some(kind)) = (words.next(), words.next()) else {
+        return GameLine::Text(line.to_string());
     };
-    if jogo != prefixo || !eh_tipo(tipo) {
-        return Linha::Texto(linha.to_string());
+    if game != prefix || !is_kind(kind) {
+        return GameLine::Text(line.to_string());
     }
-    let campos = palavras
-        .map(|palavra| match palavra.split_once('=') {
-            Some((chave, valor)) => (chave.to_string(), valor.to_string()),
-            None => (String::new(), palavra.to_string()),
+    let fields = words
+        .map(|word| match word.split_once('=') {
+            Some((key, value)) => (key.to_string(), value.to_string()),
+            None => (String::new(), word.to_string()),
         })
         .collect();
-    Linha::Fato {
-        tipo: tipo.to_string(),
-        campos,
+    GameLine::Fact {
+        kind: kind.to_string(),
+        fields,
     }
 }
 
-/// `MAPA`, `FIM_ANDAR`: maiúscula no começo, depois maiúsculas, dígitos e `_`.
-fn eh_tipo(palavra: &str) -> bool {
-    palavra.starts_with(|letra: char| letra.is_ascii_uppercase())
-        && palavra
+/// `MAPA`, `FIM_ANDAR`: an uppercase letter first, then uppercase letters, digits and `_`.
+fn is_kind(word: &str) -> bool {
+    word.starts_with(|letter: char| letter.is_ascii_uppercase())
+        && word
             .chars()
-            .all(|letra| letra.is_ascii_uppercase() || letra.is_ascii_digit() || letra == '_')
+            .all(|letter| letter.is_ascii_uppercase() || letter.is_ascii_digit() || letter == '_')
 }
 
-/// Um tipo de fato da partida: quantas vezes veio, quando veio por último e com que campos.
+/// A fact type of the run: how many times it came, when it last came and with which fields.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Tipo {
-    pub nome: String,
-    pub vezes: u64,
-    /// Desde que o jogo subiu.
-    pub ultimo_em: Duration,
-    pub campos: Vec<(String, String)>,
+pub struct FactKind {
+    pub name: String,
+    pub count: u64,
+    /// Since the game started.
+    pub last_at: Duration,
+    pub fields: Vec<(String, String)>,
 }
 
-/// O placar da partida: um `Tipo` por tipo de fato, na ordem em que cada um apareceu, para as
-/// linhas do painel não trocarem de lugar.
-pub struct Placar {
-    prefixo: String,
-    tipos: Vec<Tipo>,
-    /// Do `CONFIG`: chave, valor e origem, a última de cada chave.
+/// The run's scoreboard: one `FactKind` per fact type, in the order each one appeared, so the
+/// panel's lines do not swap places.
+pub struct Scoreboard {
+    prefix: String,
+    kinds: Vec<FactKind>,
+    /// From `CONFIG`: key, value and origin, the latest for each key.
     config: Vec<(String, String, String)>,
     total: u64,
-    /// Fatos por segundo desde que o jogo subiu, para a faísca do título.
-    por_segundo: Vec<u32>,
-    primeiro_erro: Option<String>,
+    /// Facts per second since the game started, for the title's sparkline.
+    per_second: Vec<u32>,
+    first_error: Option<String>,
 }
 
-impl Placar {
-    /// O placar vazio do jogo chamado `nome` (o prefixo dos fatos é ele em maiúsculas).
-    pub fn novo(nome: &str) -> Placar {
-        Placar {
-            prefixo: nome.to_uppercase(),
-            tipos: Vec::new(),
+impl Scoreboard {
+    /// The empty scoreboard of the game called `name` (the facts' prefix is the name in uppercase).
+    pub fn new(name: &str) -> Scoreboard {
+        Scoreboard {
+            prefix: name.to_uppercase(),
+            kinds: Vec::new(),
             config: Vec::new(),
             total: 0,
-            por_segundo: Vec::new(),
-            primeiro_erro: None,
+            per_second: Vec::new(),
+            first_error: None,
         }
     }
 
-    /// Anota uma linha que chegou `quando` (desde que o jogo subiu). Linha em branco não conta.
-    pub fn anota(&mut self, origem: Origem, linha: &str, quando: Duration) {
-        if linha.trim().is_empty() {
+    /// Records a line that arrived `at` (since the game started). A blank line does not count.
+    pub fn record(&mut self, source: Source, line: &str, at: Duration) {
+        if line.trim().is_empty() {
             return;
         }
-        if origem == Origem::Erro && self.primeiro_erro.is_none() {
-            self.primeiro_erro = Some(linha.trim_end().to_string());
+        if source == Source::Stderr && self.first_error.is_none() {
+            self.first_error = Some(line.trim_end().to_string());
         }
-        match le_linha(&self.prefixo, linha) {
-            Linha::Fato { tipo, campos } => {
-                self.conta_fato(quando);
-                if tipo == "CONFIG" {
-                    self.anota_config(&campos);
+        match parse_line(&self.prefix, line) {
+            GameLine::Fact { kind, fields } => {
+                self.count_fact(at);
+                if kind == "CONFIG" {
+                    self.record_config(&fields);
                 }
-                self.atualiza(&tipo, campos, quando);
+                self.update_kind(&kind, fields, at);
             }
-            Linha::Texto(texto) => {
-                let tipo = if origem == Origem::Erro { ERRO } else { TEXTO };
-                self.atualiza(tipo, vec![(String::new(), texto)], quando);
+            GameLine::Text(text) => {
+                let kind = if source == Source::Stderr {
+                    ERROR_KIND
+                } else {
+                    TEXT_KIND
+                };
+                self.update_kind(kind, vec![(String::new(), text)], at);
             }
         }
     }
 
-    fn conta_fato(&mut self, quando: Duration) {
+    fn count_fact(&mut self, at: Duration) {
         self.total += 1;
-        let segundo = quando.as_secs() as usize;
-        if self.por_segundo.len() <= segundo {
-            self.por_segundo.resize(segundo + 1, 0);
+        let second = at.as_secs() as usize;
+        if self.per_second.len() <= second {
+            self.per_second.resize(second + 1, 0);
         }
-        self.por_segundo[segundo] += 1;
+        self.per_second[second] += 1;
     }
 
-    /// O `CONFIG` dos jogos diz `chave=`, `valor=` e `origem=`; fica o último de cada chave.
-    fn anota_config(&mut self, campos: &[(String, String)]) {
-        let campo = |nome: &str| {
-            campos
+    /// The games' `CONFIG` says `chave=`, `valor=` and `origem=`; the latest for each key stays.
+    fn record_config(&mut self, fields: &[(String, String)]) {
+        let field = |name: &str| {
+            fields
                 .iter()
-                .find(|(chave, _)| chave == nome)
-                .map(|(_, valor)| valor.clone())
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
         };
-        let (Some(chave), Some(valor), Some(origem)) =
-            (campo("chave"), campo("valor"), campo("origem"))
+        let (Some(key), Some(value), Some(origin)) =
+            (field("chave"), field("valor"), field("origem"))
         else {
             return;
         };
-        match self.config.iter_mut().find(|(ja, _, _)| *ja == chave) {
-            Some(entrada) => (entrada.1, entrada.2) = (valor, origem),
-            None => self.config.push((chave, valor, origem)),
+        match self.config.iter_mut().find(|(seen, _, _)| *seen == key) {
+            Some(entry) => (entry.1, entry.2) = (value, origin),
+            None => self.config.push((key, value, origin)),
         }
     }
 
-    fn atualiza(&mut self, nome: &str, campos: Vec<(String, String)>, quando: Duration) {
-        match self.tipos.iter_mut().find(|tipo| tipo.nome == nome) {
-            Some(tipo) => {
-                tipo.vezes += 1;
-                tipo.ultimo_em = quando;
-                tipo.campos = campos;
+    fn update_kind(&mut self, name: &str, fields: Vec<(String, String)>, at: Duration) {
+        match self.kinds.iter_mut().find(|kind| kind.name == name) {
+            Some(kind) => {
+                kind.count += 1;
+                kind.last_at = at;
+                kind.fields = fields;
             }
-            None => self.tipos.push(Tipo {
-                nome: nome.to_string(),
-                vezes: 1,
-                ultimo_em: quando,
-                campos,
+            None => self.kinds.push(FactKind {
+                name: name.to_string(),
+                count: 1,
+                last_at: at,
+                fields,
             }),
         }
     }
 
-    pub fn tipos(&self) -> &[Tipo] {
-        &self.tipos
+    pub fn kinds(&self) -> &[FactKind] {
+        &self.kinds
     }
 
-    /// Quantos fatos vieram (as linhas soltas ficam de fora).
+    /// How many facts came (the loose lines are left out).
     pub fn total(&self) -> u64 {
         self.total
     }
 
-    /// A primeira linha do stderr: num jogo que morre no boot, é ela que diz por quê.
-    pub fn primeiro_erro(&self) -> Option<&str> {
-        self.primeiro_erro.as_deref()
+    /// The first stderr line: in a game that dies at boot, it is the one that says why.
+    pub fn first_error(&self) -> Option<&str> {
+        self.first_error.as_deref()
     }
 
-    /// As chaves do `CONFIG` cuja origem não é `padrao`, com o valor, na ordem em que vieram.
-    pub fn fora_do_padrao(&self) -> Vec<(&str, &str)> {
+    /// The `CONFIG` keys whose origin is not `padrao`, with the value, in the order they came.
+    pub fn off_default(&self) -> Vec<(&str, &str)> {
         self.config
             .iter()
-            .filter(|(_, _, origem)| origem != "padrao")
-            .map(|(chave, valor, _)| (chave.as_str(), valor.as_str()))
+            .filter(|(_, _, origin)| origin != "padrao")
+            .map(|(key, value, _)| (key.as_str(), value.as_str()))
             .collect()
     }
 
-    /// Fatos por segundo nas últimas `janelas` até o segundo de `agora`, o mais antigo primeiro;
-    /// antes de o jogo subir, zero.
-    pub fn ritmo(&self, agora: Duration, janelas: usize) -> Vec<u32> {
-        let fim = agora.as_secs() as i64 + 1;
-        (fim - janelas as i64..fim)
-            .map(|segundo| {
-                usize::try_from(segundo)
+    /// Facts per second over the last `windows` up to the second of `now`, the oldest first; before
+    /// the game started, zero.
+    pub fn recent_rate(&self, now: Duration, windows: usize) -> Vec<u32> {
+        let end = now.as_secs() as i64 + 1;
+        (end - windows as i64..end)
+            .map(|second| {
+                usize::try_from(second)
                     .ok()
-                    .and_then(|segundo| self.por_segundo.get(segundo).copied())
+                    .and_then(|second| self.per_second.get(second).copied())
                     .unwrap_or(0)
             })
             .collect()
@@ -202,40 +208,40 @@ impl Placar {
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
 
-    fn campos(pares: &[(&str, &str)]) -> Vec<(String, String)> {
-        pares
+    fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
             .iter()
-            .map(|(chave, valor)| (chave.to_string(), valor.to_string()))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect()
     }
 
-    fn em(segundos: f64) -> Duration {
-        Duration::from_secs_f64(segundos)
+    fn at(seconds: f64) -> Duration {
+        Duration::from_secs_f64(seconds)
     }
 
     #[test]
-    fn le_linha_separa_fato_do_jogo_de_texto_solto() {
+    fn parse_line_tells_a_game_fact_from_loose_text() {
         assert_eq!(
-            le_linha(
+            parse_line(
                 "CAMPCRAWLER",
                 "CAMPCRAWLER MAPA numero=1 linhas=9 esperado=9"
             ),
-            Linha::Fato {
-                tipo: "MAPA".to_string(),
-                campos: campos(&[("numero", "1"), ("linhas", "9"), ("esperado", "9")]),
+            GameLine::Fact {
+                kind: "MAPA".to_string(),
+                fields: fields(&[("numero", "1"), ("linhas", "9"), ("esperado", "9")]),
             }
         );
         assert_eq!(
-            le_linha("CAMPCRAWLER", "CAMPCRAWLER FIM_ANDAR solto estado=won\r"),
-            Linha::Fato {
-                tipo: "FIM_ANDAR".to_string(),
-                campos: campos(&[("", "solto"), ("estado", "won")]),
+            parse_line("CAMPCRAWLER", "CAMPCRAWLER FIM_ANDAR solto estado=won\r"),
+            GameLine::Fact {
+                kind: "FIM_ANDAR".to_string(),
+                fields: fields(&[("", "solto"), ("estado", "won")]),
             }
         );
-        for texto in [
+        for text in [
             "BOMBERBOOM INICIO motor=love",
             "Error: Could not initialize SDL video subsystem (x11 not available)",
             "CAMPCRAWLER",
@@ -243,66 +249,80 @@ mod testes {
             "\t[C]: in function 'xpcall'",
         ] {
             assert_eq!(
-                le_linha("CAMPCRAWLER", texto),
-                Linha::Texto(texto.to_string()),
-                "{texto:?}"
+                parse_line("CAMPCRAWLER", text),
+                GameLine::Text(text.to_string()),
+                "{text:?}"
             );
         }
     }
 
     #[test]
-    fn placar_conta_cada_tipo_na_ordem_em_que_apareceu() {
-        let mut placar = Placar::novo("CampCrawler");
-        placar.anota(Origem::Saida, "CAMPCRAWLER PARTIDA semente=1", em(0.1));
-        placar.anota(Origem::Saida, "CAMPCRAWLER VEZ soldado=1 texto=1º", em(0.5));
-        placar.anota(Origem::Saida, "", em(0.6));
-        placar.anota(Origem::Saida, "aviso solto do LÖVE", em(0.7));
-        placar.anota(Origem::Saida, "CAMPCRAWLER VEZ soldado=2 texto=2º", em(1.2));
-        placar.anota(Origem::Erro, "Error: boot.lua:479", em(3.9));
-        placar.anota(Origem::Erro, "stack traceback:", em(3.9));
-
-        let tipos: Vec<(&str, u64)> = placar
-            .tipos()
-            .iter()
-            .map(|tipo| (tipo.nome.as_str(), tipo.vezes))
-            .collect();
-        assert_eq!(tipos, [("PARTIDA", 1), ("VEZ", 2), (TEXTO, 1), (ERRO, 2)]);
-        let vez = &placar.tipos()[1];
-        assert_eq!(vez.campos, campos(&[("soldado", "2"), ("texto", "2º")]));
-        assert_eq!(vez.ultimo_em, em(1.2));
-        assert_eq!(
-            placar.tipos()[3].campos,
-            campos(&[("", "stack traceback:")])
+    fn the_scoreboard_counts_each_type_in_the_order_it_appeared() {
+        let mut scoreboard = Scoreboard::new("CampCrawler");
+        scoreboard.record(Source::Stdout, "CAMPCRAWLER PARTIDA semente=1", at(0.1));
+        scoreboard.record(
+            Source::Stdout,
+            "CAMPCRAWLER VEZ soldado=1 texto=1º",
+            at(0.5),
         );
-        assert_eq!(placar.total(), 3, "só os fatos");
-        assert_eq!(placar.primeiro_erro(), Some("Error: boot.lua:479"));
+        scoreboard.record(Source::Stdout, "", at(0.6));
+        scoreboard.record(Source::Stdout, "loose LÖVE warning", at(0.7));
+        scoreboard.record(
+            Source::Stdout,
+            "CAMPCRAWLER VEZ soldado=2 texto=2º",
+            at(1.2),
+        );
+        scoreboard.record(Source::Stderr, "Error: boot.lua:479", at(3.9));
+        scoreboard.record(Source::Stderr, "stack traceback:", at(3.9));
+
+        let kinds: Vec<(&str, u64)> = scoreboard
+            .kinds()
+            .iter()
+            .map(|kind| (kind.name.as_str(), kind.count))
+            .collect();
+        assert_eq!(
+            kinds,
+            [("PARTIDA", 1), ("VEZ", 2), (TEXT_KIND, 1), (ERROR_KIND, 2)]
+        );
+        let turn = &scoreboard.kinds()[1];
+        assert_eq!(turn.fields, fields(&[("soldado", "2"), ("texto", "2º")]));
+        assert_eq!(turn.last_at, at(1.2));
+        assert_eq!(
+            scoreboard.kinds()[3].fields,
+            fields(&[("", "stack traceback:")])
+        );
+        assert_eq!(scoreboard.total(), 3, "only the facts");
+        assert_eq!(scoreboard.first_error(), Some("Error: boot.lua:479"));
     }
 
     #[test]
-    fn placar_guarda_a_config_fora_do_padrao() {
-        let mut placar = Placar::novo("BomberBoom");
-        let linhas = [
+    fn the_scoreboard_keeps_the_config_off_its_default() {
+        let mut scoreboard = Scoreboard::new("BomberBoom");
+        let lines = [
             "BOMBERBOOM CONFIG chave=seed valor=17 origem=plataforma",
             "BOMBERBOOM CONFIG chave=autoplay valor=0 origem=padrao",
             "BOMBERBOOM CONFIG chave=autoplay valor=1 origem=argumento",
             "BOMBERBOOM CONFIG chave=mode valor=- origem=padrao",
         ];
-        for linha in linhas {
-            placar.anota(Origem::Saida, linha, em(0.0));
+        for line in lines {
+            scoreboard.record(Source::Stdout, line, at(0.0));
         }
-        assert_eq!(placar.fora_do_padrao(), [("seed", "17"), ("autoplay", "1")]);
-        assert_eq!(placar.tipos()[0].vezes, 4);
+        assert_eq!(
+            scoreboard.off_default(),
+            [("seed", "17"), ("autoplay", "1")]
+        );
+        assert_eq!(scoreboard.kinds()[0].count, 4);
     }
 
     #[test]
-    fn ritmo_conta_os_fatos_por_segundo_ate_agora() {
-        let mut placar = Placar::novo("Boomlitude");
-        for segundos in [0.1, 0.5, 1.2, 3.9] {
-            placar.anota(Origem::Saida, "BOOMLITUDE LANCE aceito=sim", em(segundos));
+    fn recent_rate_counts_the_facts_per_second_up_to_now() {
+        let mut scoreboard = Scoreboard::new("Boomlitude");
+        for seconds in [0.1, 0.5, 1.2, 3.9] {
+            scoreboard.record(Source::Stdout, "BOOMLITUDE LANCE aceito=sim", at(seconds));
         }
-        placar.anota(Origem::Saida, "texto solto não conta", em(2.5));
-        assert_eq!(placar.ritmo(em(4.0), 5), [2, 1, 0, 1, 0]);
-        assert_eq!(placar.ritmo(em(4.0), 3), [0, 1, 0]);
-        assert_eq!(placar.ritmo(em(1.5), 4), [0, 0, 2, 1]);
+        scoreboard.record(Source::Stdout, "loose text does not count", at(2.5));
+        assert_eq!(scoreboard.recent_rate(at(4.0), 5), [2, 1, 0, 1, 0]);
+        assert_eq!(scoreboard.recent_rate(at(4.0), 3), [0, 1, 0]);
+        assert_eq!(scoreboard.recent_rate(at(1.5), 4), [0, 0, 2, 1]);
     }
 }

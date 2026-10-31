@@ -34,29 +34,31 @@ ignoraria este arquivo).
 - Produto (autor, 28/10): painel em tela cheia; estado ao vivo durante o jogo; obra se mostra, não
   se impede; aviso do X0 com o `ln`. Cores anil e magenta, em 24 bits (autor, 30/10).
 - Portfólio (autor, 31/10): repositório público, GPL-3.0; README em inglês com resumo em português.
-  Código e comentários seguem em português até a rodada própria de tradução. `≠` marca o lançador
-  que destoa da maioria; só avisa.
+  Código e comentários em inglês; o texto da tela segue em português (autor, 31/10). `≠` marca o
+  lançador que destoa da maioria; só avisa.
 
 ## Mapa
 
 - `main.rs`: argumentos e raiz; painel ou `jogar <jogo>` direto.
-- `games.rs`: `descobre`, `procura`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
+- `games.rs`: `discover`, `find_game`; `run_attached` (direto); `spawn_piped` (cano, stdin nulo,
+  grupo próprio).
 - `shared_launcher.rs`: a cópia do lançador em cada jogo e quais destoam.
-- `x_display.rs`: X antes de abrir. `git_state.rs`: git das pastas. `facts.rs`: linhas do jogo, `Placar`.
+- `x_display.rs`: X antes de abrir. `git_state.rs`: git das pastas. `facts.rs`: linhas do jogo,
+  `Scoreboard`.
 - `panel/`: `mod.rs` laço e lista (único com terminal); `game_process.rs` jogo rodando (único com
-  processo); `signals.rs`; `list_screen.rs`, `live_screen.rs` só desenham; `theme.rs` cores e degradê;
-  `keys.rs`, `formatting.rs` puros; `draw_test_support.rs` só nos testes.
+  processo); `signals.rs`; `list_screen.rs`, `live_screen.rs` só desenham; `theme.rs` cores e
+  degradê; `keys.rs`, `formatting.rs` puros; `draw_test_support.rs` só nos testes.
 - `test_support.rs`: ajudantes; `tests/` o inclui por `#[path]`.
 
 ## Código (Clean Code para agente, Akita)
 
 - Arquivo: alvo 300 linhas, teto 500 com testes. Função: alvo 20, teto 40. Passou: dividir.
-- Nome em português, único no `rg -nw`. Proibido: `dados`, `info`, `util`, `handler`.
+- Nome em inglês, único no `rg -nw` (autor, 31/10). Proibido: `data`, `info`, `util`, `handler`.
 - Tipos explícitos. Erro ao autor: `Result<_, String>`, uma linha, valor e esperado.
 - `unwrap`/`expect` fora de teste: só invariante, com o porquê.
 - Retorno cedo; no máximo 2 níveis de indentação.
 - Mundo por parâmetro (raiz, display, sockets); só invólucro fino lê `env`.
-- `ratatui` só em `panel/`; desenho recebe `Vista…` pronta.
+- `ratatui` só em `panel/`; desenho recebe `…View` pronta.
 - Cor só pelas constantes e pintores de `theme.rs`; nada de `.red()`, `.green()` solto.
 - `///` em toda função: intenção e limite. Comentário: porquê e proveniência. Manter comentário
   existente; tirar só o falso.
@@ -67,7 +69,7 @@ ignoraria este arquivo).
 - Pasta que some depois da descoberta; jogo que morre: uma linha com código e 1ª linha do stderr.
 - Raiz sem jogo: o painel diz onde procurou e o que é um jogo; as teclas não quebram.
 - Git falha: sem marca. Sem tty: sair 2.
-- `x`: SIGTERM no grupo. Ctrl+C: SIGTERM, 2 s, SIGKILL, sair 130. Pânico: o `Drop` da `Partida`.
+- `x`: SIGTERM no grupo. Ctrl+C: SIGTERM, 2 s, SIGKILL, sair 130. Pânico: o `Drop` do `RunningGame`.
 - SIGHUP/SIGTERM no jogar: o tratador manda SIGTERM ao grupo do jogo. SIGHUP sai ali (`_exit`): no
   tty fechado o crossterm gira em falso e o laço não volta. SIGTERM sai pelo laço.
 - Ainda deixa órfão: SIGKILL, ou SIGINT/SIGQUIT de fora, no jogar.
@@ -80,7 +82,7 @@ ignoraria este arquivo).
 - Teste alterado: justificar no commit; expectativa antiga ainda válida ganha outro teste.
 - Exceções, só declaradas no commit: refatoração (a suíte é a rede); aparência da tela (captura,
   desenho testado no `TestBackend`).
-- Só descartável: `pasta_de_teste`, `git_teste`, `jogo_falso`, `UnixListener` como X. Nunca
+- Só descartável: `test_folder`, `test_git`, `fake_game`, `UnixListener` como X. Nunca
   `~/lua`, `~/.cargo`, tela do autor.
 
 ## Limpeza (Akita, "A limpeza da casa na era do AI coding")

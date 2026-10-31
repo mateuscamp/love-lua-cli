@@ -1,10 +1,11 @@
-//! O painel em tela cheia (autor, 28/10): a lista dos jogos com os detalhes do escolhido e,
-//! enquanto um jogo roda na janela dele, o estado ao vivo do que ele escreve. Este arquivo é o laço
-//! e a lista, o único que fala com o terminal; o jogo rodando mora em `processo`, os sinais em
-//! `sinais`, o desenho em `lista` e `partida`, as cores em `tema`, as teclas em `teclas`.
+//! The full-screen panel (author, 28/10): the list of games with the chosen one's details and,
+//! while a game runs in its window, the live state of what it writes. This file is the loop and the
+//! list, the only one that talks to the terminal; the running game lives in `game_process`, signals
+//! in `signals`, drawing in `list_screen` and `live_screen`, colors in `theme`, keys in `keys`.
 //!
-//! O jogo sobe sem terminal (a saída num cano), então o painel fica na tela o tempo todo: não há
-//! suspender e retomar o modo cru. Quando a janela do jogo fecha, a lista volta com um recado.
+//! The game starts without a terminal (its output in a pipe), so the panel stays on screen the
+//! whole time: there is no suspending and resuming raw mode. When the game's window closes, the
+//! list comes back with a notice.
 
 #[cfg(test)]
 mod draw_test_support;
@@ -24,460 +25,475 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEvent};
 
-use crate::games::{self, Jogo};
-use crate::shared_launcher::{self, Copia};
+use crate::games::{self, Game};
+use crate::shared_launcher::{self, LauncherCopy};
 use crate::{git_state, x_display};
-use game_process::Partida;
-use keys::Acao;
-use list_screen::{Recado, Situacao, VistaLista};
-use signals::{anota_sinais_de_saida, saida_por_sinal};
+use game_process::RunningGame;
+use keys::Action;
+use list_screen::{GameEntry, ListView, Notice};
+use signals::{exit_by_signal, install_exit_signals};
 
 #[cfg(test)]
-pub(crate) use draw_test_support::{acha, tela_de_teste, texto_da_tela};
+pub(crate) use draw_test_support::{find_text, screen_text, test_screen};
 
-/// De quanto em quanto o painel acorda sem tecla, para o placar andar.
-const PASSO: Duration = Duration::from_millis(100);
-/// De quanto em quanto a lista relê o git das pastas e a tela X.
-const RELEITURA: Duration = Duration::from_secs(2);
+/// How often the panel wakes up without a key, so the scoreboard moves.
+const TICK: Duration = Duration::from_millis(100);
+/// How often the list rereads the folders' git and the X display.
+const REREAD_EVERY: Duration = Duration::from_secs(2);
 
-/// Abre o painel e só volta quando o autor sai: 0 com Esc ou q, 130 com Ctrl+C, 128 + sinal com
-/// SIGHUP ou SIGTERM, 2 sem terminal.
-pub fn menu(raiz: &Path) -> ExitCode {
+/// Opens the panel and only returns when the author quits: 0 with Esc or q, 130 with Ctrl+C,
+/// 128 + signal with SIGHUP or SIGTERM, 2 without a terminal.
+pub fn menu(root: &Path) -> ExitCode {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         eprintln!("jogar: o menu precisa de um terminal; sem ele, jogar <jogo> abre direto");
         return ExitCode::from(2);
     }
-    anota_sinais_de_saida();
+    install_exit_signals();
     let mut terminal = ratatui::init();
-    let saida = laco(&mut terminal, raiz);
+    let exit = event_loop(&mut terminal, root);
     ratatui::restore();
-    saida.unwrap_or_else(|erro| {
-        eprintln!("jogar: o terminal falhou: {erro}");
+    exit.unwrap_or_else(|error| {
+        eprintln!("jogar: o terminal falhou: {error}");
         ExitCode::from(2)
     })
 }
 
-/// O laço sai pelo `return`, e a `partida` cai com ele: com um jogo aberto, o `Drop` dela o fecha.
-fn laco(terminal: &mut DefaultTerminal, raiz: &Path) -> io::Result<ExitCode> {
-    let mut lista = Lista::nova(raiz);
-    let mut partida: Option<Partida> = None;
+/// The loop leaves through `return`, and `running` drops with it: with a game open, its `Drop`
+/// closes the game.
+fn event_loop(terminal: &mut DefaultTerminal, root: &Path) -> io::Result<ExitCode> {
+    let mut list = GameList::load(root);
+    let mut running: Option<RunningGame> = None;
     loop {
-        if let Some(saida) = saida_por_sinal() {
-            return Ok(saida);
+        if let Some(exit) = exit_by_signal() {
+            return Ok(exit);
         }
-        acompanha(&mut lista, &mut partida);
-        terminal.draw(|frame| match &partida {
-            Some(jogando) => live_screen::desenha(frame, &jogando.vista()),
-            None => list_screen::desenha(frame, &lista.vista()),
+        tick(&mut list, &mut running);
+        terminal.draw(|frame| match &running {
+            Some(playing) => live_screen::draw_live(frame, &playing.live_view()),
+            None => list_screen::draw_list(frame, &list.list_view()),
         })?;
-        let Some(tecla) = proxima_tecla()? else {
+        let Some(key) = next_key()? else {
             continue;
         };
-        if let Some(saida) = reage(keys::acao(tecla), &mut lista, &mut partida) {
-            return Ok(saida);
+        if let Some(exit) = react(keys::action_for(key), &mut list, &mut running) {
+            return Ok(exit);
         }
     }
 }
 
-/// A tecla que chegar em até `PASSO`. Um sinal que interrompe a espera (o SIGHUP do terminal que
-/// fecha) não é erro: o laço volta e vê o sinal anotado.
-fn proxima_tecla() -> io::Result<Option<KeyEvent>> {
-    let interrompido = |erro: &io::Error| erro.kind() == io::ErrorKind::Interrupted;
-    match event::poll(PASSO) {
+/// The key that arrives within `TICK`. A signal that interrupts the wait (the SIGHUP of a terminal
+/// that closes) is not an error: the loop comes back and sees the recorded signal.
+fn next_key() -> io::Result<Option<KeyEvent>> {
+    let interrupted = |error: &io::Error| error.kind() == io::ErrorKind::Interrupted;
+    match event::poll(TICK) {
         Ok(true) => {}
         Ok(false) => return Ok(None),
-        Err(erro) if interrompido(&erro) => return Ok(None),
-        Err(erro) => return Err(erro),
+        Err(error) if interrupted(&error) => return Ok(None),
+        Err(error) => return Err(error),
     }
     match event::read() {
-        Ok(Event::Key(tecla)) => Ok(Some(tecla)),
+        Ok(Event::Key(key)) => Ok(Some(key)),
         Ok(_) => Ok(None),
-        Err(erro) if interrompido(&erro) => Ok(None),
-        Err(erro) => Err(erro),
+        Err(error) if interrupted(&error) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
-/// O que anda sem tecla: o placar recolhe o que o jogo escreveu e, quando ele fecha, a lista volta
-/// com o recado; sem jogo, a lista relê o git e a tela de tempos em tempos.
-fn acompanha(lista: &mut Lista, partida: &mut Option<Partida>) {
-    let Some(jogando) = partida else {
-        lista.le_se_velha();
+/// What moves without a key: the scoreboard collects what the game wrote and, when the game
+/// closes, the list comes back with the notice; with no game, the list rereads git and the display
+/// from time to time.
+fn tick(list: &mut GameList, running: &mut Option<RunningGame>) {
+    let Some(playing) = running else {
+        list.reload_if_stale();
         return;
     };
-    jogando.recolhe();
-    if let Some(recado) = jogando.fim() {
-        *partida = None;
-        lista.le();
-        lista.recado = Some(recado);
+    playing.drain_lines();
+    if let Some(notice) = playing.poll_end() {
+        *running = None;
+        list.reload();
+        list.notice = Some(notice);
     }
 }
 
-/// A ação no contexto. Na lista, setas escolhem, Enter abre e Esc ou q saem; na partida, setas
-/// rolam e `x` encerra o jogo. Ctrl+C sai de qualquer lugar, fechando o jogo antes. `Some` é sair.
-fn reage(acao: Acao, lista: &mut Lista, partida: &mut Option<Partida>) -> Option<ExitCode> {
-    match (acao, partida.as_mut()) {
-        (Acao::Interrompe, jogando) => {
-            jogando.map(Partida::encerra_e_espera);
+/// The action in context. In the list, arrows choose, Enter opens and Esc or q quit; in the running
+/// game, arrows scroll and `x` stops the game. Ctrl+C quits from anywhere, closing the game first.
+/// `Some` is quitting.
+fn react(
+    action: Action,
+    list: &mut GameList,
+    running: &mut Option<RunningGame>,
+) -> Option<ExitCode> {
+    match (action, running.as_mut()) {
+        (Action::Interrupt, playing) => {
+            playing.map(RunningGame::stop_and_wait);
             return Some(ExitCode::from(130));
         }
-        (Acao::Sobe, Some(jogando)) => jogando.rola(-1),
-        (Acao::Desce, Some(jogando)) => jogando.rola(1),
-        (Acao::Encerra, Some(jogando)) => jogando.encerra(),
+        (Action::MoveUp, Some(playing)) => playing.scroll_by(-1),
+        (Action::MoveDown, Some(playing)) => playing.scroll_by(1),
+        (Action::StopGame, Some(playing)) => playing.stop(),
         (_, Some(_)) => {}
-        (Acao::Sobe, None) => lista.move_escolha(-1),
-        (Acao::Desce, None) => lista.move_escolha(1),
-        (Acao::Abre, None) => *partida = lista.abre(),
-        (Acao::Sai, None) => return Some(ExitCode::SUCCESS),
+        (Action::MoveUp, None) => list.move_choice(-1),
+        (Action::MoveDown, None) => list.move_choice(1),
+        (Action::Open, None) => *running = list.open_chosen(),
+        (Action::Quit, None) => return Some(ExitCode::SUCCESS),
         (_, None) => {}
     }
     None
 }
 
-/// A lista: o que se sabe de cada jogo e o que o autor escolheu.
-struct Lista {
-    raiz: PathBuf,
-    raiz_mostrada: String,
-    escolhido: usize,
-    situacoes: Vec<Situacao>,
-    tela: Result<(), String>,
+/// The list: what is known about each game and what the author chose.
+struct GameList {
+    root: PathBuf,
+    shown_root: String,
+    chosen: usize,
+    entries: Vec<GameEntry>,
+    display_check: Result<(), String>,
     display: String,
-    recado: Option<Recado>,
-    lida: Instant,
+    notice: Option<Notice>,
+    read_at: Instant,
 }
 
-impl Lista {
-    fn nova(raiz: &Path) -> Lista {
-        let mut lista = Lista::vazia(raiz);
-        lista.le();
-        lista
+impl GameList {
+    fn load(root: &Path) -> GameList {
+        let mut list = GameList::blank(root);
+        list.reload();
+        list
     }
 
-    /// A lista antes de ler o git e a tela X: os testes partem dela, sem tocar o X do autor.
-    fn vazia(raiz: &Path) -> Lista {
-        Lista {
-            raiz: raiz.to_path_buf(),
-            raiz_mostrada: mostra_raiz(raiz),
-            escolhido: 0,
-            situacoes: Vec::new(),
-            tela: Ok(()),
+    /// The list before reading git and the X display: the tests start from it, without touching
+    /// the author's X.
+    fn blank(root: &Path) -> GameList {
+        GameList {
+            root: root.to_path_buf(),
+            shown_root: tilde_root(root),
+            chosen: 0,
+            entries: Vec::new(),
+            display_check: Ok(()),
             display: String::new(),
-            recado: None,
-            lida: Instant::now(),
+            notice: None,
+            read_at: Instant::now(),
         }
     }
 
-    /// Redescobre os jogos e relê o git de cada pasta e a tela X (uns 15 ms para três jogos,
-    /// medido antes do Gods e da descoberta).
-    fn le(&mut self) {
-        self.le_jogos();
-        self.tela = x_display::tela();
+    /// Rediscovers the games and rereads each folder's git and the X display (about 15 ms for three
+    /// games, measured before Gods and before discovery).
+    fn reload(&mut self) {
+        self.reload_games();
+        self.display_check = x_display::check_this_display();
         self.display = std::env::var("DISPLAY").unwrap_or_default();
-        self.lida = Instant::now();
+        self.read_at = Instant::now();
     }
 
-    /// Os jogos da raiz, com o git e a cópia do lançador de cada um; o escolhido fica na lista.
-    fn le_jogos(&mut self) {
-        let jogos = games::descobre(&self.raiz);
-        let copias: Vec<Copia> = jogos
+    /// The games in the root, with each one's git and launcher copy; the chosen one stays in the
+    /// list.
+    fn reload_games(&mut self) {
+        let games = games::discover(&self.root);
+        let copies: Vec<LauncherCopy> = games
             .iter()
-            .map(|jogo| shared_launcher::le_copia(&self.raiz.join(&jogo.pasta)))
+            .map(|game| shared_launcher::read_copy(&self.root.join(&game.folder)))
             .collect();
-        self.situacoes = jogos
+        self.entries = games
             .into_iter()
-            .zip(shared_launcher::destoam(&copias))
-            .map(|(jogo, destoa)| situacao(&self.raiz, jogo, destoa))
+            .zip(shared_launcher::which_differ(&copies))
+            .map(|(game, launcher_differs)| game_entry(&self.root, game, launcher_differs))
             .collect();
-        self.escolhido = self.escolhido.min(self.situacoes.len().saturating_sub(1));
+        self.chosen = self.chosen.min(self.entries.len().saturating_sub(1));
     }
 
-    fn le_se_velha(&mut self) {
-        if self.lida.elapsed() >= RELEITURA {
-            self.le();
+    fn reload_if_stale(&mut self) {
+        if self.read_at.elapsed() >= REREAD_EVERY {
+            self.reload();
         }
     }
 
-    /// Anda na lista, dando a volta nas pontas; na lista vazia, fica.
-    fn move_escolha(&mut self, passo: isize) {
-        let total = self.situacoes.len() as isize;
+    /// Moves along the list, wrapping around at the ends; in the empty list, stays put.
+    fn move_choice(&mut self, step: isize) {
+        let total = self.entries.len() as isize;
         if total == 0 {
             return;
         }
-        self.escolhido = (self.escolhido as isize + passo).rem_euclid(total) as usize;
+        self.chosen = (self.chosen as isize + step).rem_euclid(total) as usize;
     }
 
-    /// Sobe o jogo escolhido; sem tela X ou se ele não sobe, fica o recado e nada abre. O aviso da
-    /// tela já está no rodapé, então o recado não o repete. Na lista vazia, nada: os detalhes já
-    /// dizem o que é um jogo.
-    fn abre(&mut self) -> Option<Partida> {
-        let jogo = &self.situacoes.get(self.escolhido)?.jogo;
-        if self.tela.is_err() {
-            self.recado = Some(Recado {
-                texto: format!("{} não abre sem tela X", jogo.pasta),
-                problema: true,
+    /// Starts the chosen game; without an X display or if it does not start, the notice stays and
+    /// nothing opens. The display warning is already in the footer, so the notice does not repeat
+    /// it. In the empty list, nothing: the details already say what a game is.
+    fn open_chosen(&mut self) -> Option<RunningGame> {
+        let game = &self.entries.get(self.chosen)?.game;
+        if self.display_check.is_err() {
+            self.notice = Some(Notice {
+                text: format!("{} não abre sem tela X", game.folder),
+                is_problem: true,
             });
             return None;
         }
-        match Partida::sobe(&self.raiz, jogo) {
-            Ok(jogando) => {
-                self.recado = None;
-                Some(jogando)
+        match RunningGame::start(&self.root, game) {
+            Ok(playing) => {
+                self.notice = None;
+                Some(playing)
             }
-            Err(erro) => {
-                self.recado = Some(Recado {
-                    texto: erro,
-                    problema: true,
+            Err(error) => {
+                self.notice = Some(Notice {
+                    text: error,
+                    is_problem: true,
                 });
                 None
             }
         }
     }
 
-    fn vista(&self) -> VistaLista<'_> {
-        VistaLista {
-            raiz: &self.raiz_mostrada,
-            situacoes: &self.situacoes,
-            escolhido: self.escolhido,
-            tela: &self.tela,
+    fn list_view(&self) -> ListView<'_> {
+        ListView {
+            root: &self.shown_root,
+            entries: &self.entries,
+            chosen: self.chosen,
+            display_check: &self.display_check,
             display: &self.display,
-            recado: self.recado.as_ref(),
-            agora: segundos_unix(),
+            notice: self.notice.as_ref(),
+            now: unix_seconds(),
         }
     }
 }
 
-fn situacao(raiz: &Path, jogo: Jogo, destoa: bool) -> Situacao {
-    let repo = git_state::repo(&raiz.join(&jogo.pasta));
-    Situacao { jogo, repo, destoa }
-}
-
-/// A raiz com o `HOME` escrito como `~`, como o autor a escreve.
-fn mostra_raiz(raiz: &Path) -> String {
-    let casa = std::env::var_os("HOME").map(PathBuf::from);
-    match casa.and_then(|casa| raiz.strip_prefix(casa).ok().map(Path::to_path_buf)) {
-        Some(resto) => format!("~/{}", resto.display()),
-        None => raiz.display().to_string(),
+fn game_entry(root: &Path, game: Game, launcher_differs: bool) -> GameEntry {
+    let repo = git_state::read_repo(&root.join(&game.folder));
+    GameEntry {
+        game,
+        repo,
+        launcher_differs,
     }
 }
 
-fn segundos_unix() -> i64 {
+/// The root with `HOME` written as `~`, as the author writes it.
+fn tilde_root(root: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.and_then(|home| root.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => root.display().to_string(),
+    }
+}
+
+fn unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |desde| desde.as_secs() as i64)
+        .map_or(0, |since| since.as_secs() as i64)
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
     use crate::test_support::{
-        LANCADOR_COM_NETO, espera_pid, jogo_falso, morre_em, pasta_de_teste,
+        LAUNCHER_WITH_GRANDCHILD, dies_within, fake_game, test_folder, wait_for_pid,
     };
     use std::thread;
 
-    // Auditoria de 28/10, achado A2: o laço do painel sem terminal. As teclas entram pelo `reage`,
-    // o tempo pelo `acompanha`, e os jogos são de mentira.
+    // Audit of 28/10, finding A2: the panel's loop without a terminal. The keys come in through
+    // `react`, time through `tick`, and the games are fake.
 
-    /// Roda o `acompanha` até o jogo fechar e a lista voltar.
-    fn espera_o_fim(lista: &mut Lista, partida: &mut Option<Partida>) {
-        let prazo = Instant::now() + Duration::from_secs(5);
-        while partida.is_some() {
-            assert!(Instant::now() < prazo, "o jogo de mentira não fechou");
-            acompanha(lista, partida);
+    /// Runs `tick` until the game closes and the list comes back.
+    fn wait_for_the_end(list: &mut GameList, running: &mut Option<RunningGame>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while running.is_some() {
+            assert!(Instant::now() < deadline, "the fake game did not close");
+            tick(list, running);
             thread::sleep(Duration::from_millis(20));
         }
     }
 
-    fn recado(lista: &Lista) -> (&str, bool) {
-        let recado = lista.recado.as_ref().expect("a lista ficou sem recado");
-        (recado.texto.as_str(), recado.problema)
+    fn notice(list: &GameList) -> (&str, bool) {
+        let notice = list.notice.as_ref().expect("the list has no notice");
+        (notice.text.as_str(), notice.is_problem)
     }
 
-    /// A lista dos jogos descobertos em `raiz`, sem ler a tela X do autor.
-    fn lista_de(raiz: &Path) -> Lista {
-        let mut lista = Lista::vazia(raiz);
-        lista.le_jogos();
-        lista
+    /// The list of the games discovered in `root`, without reading the author's X display.
+    fn list_of(root: &Path) -> GameList {
+        let mut list = GameList::blank(root);
+        list.reload_games();
+        list
     }
 
     #[test]
-    fn na_lista_as_setas_dao_a_volta_e_esc_ou_ctrl_c_saem() {
-        let raiz = pasta_de_teste("lista-teclas");
-        for pasta in ["a", "b", "c"] {
-            jogo_falso(&raiz, pasta, "exit 0\n");
+    fn in_the_list_the_arrows_wrap_around_and_esc_or_ctrl_c_quit() {
+        let root = test_folder("list-keys");
+        for folder in ["a", "b", "c"] {
+            fake_game(&root, folder, "exit 0\n");
         }
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        assert_eq!(reage(Acao::Sobe, &mut lista, &mut partida), None);
-        assert_eq!(lista.escolhido, 2, "do primeiro, sobe ao último");
-        assert_eq!(reage(Acao::Desce, &mut lista, &mut partida), None);
-        assert_eq!(lista.escolhido, 0, "do último, desce ao primeiro");
-        assert_eq!(reage(Acao::Encerra, &mut lista, &mut partida), None);
+        let mut list = list_of(&root);
+        let mut running = None;
+        assert_eq!(react(Action::MoveUp, &mut list, &mut running), None);
+        assert_eq!(list.chosen, 2, "from the first, up to the last");
+        assert_eq!(react(Action::MoveDown, &mut list, &mut running), None);
+        assert_eq!(list.chosen, 0, "from the last, down to the first");
+        assert_eq!(react(Action::StopGame, &mut list, &mut running), None);
         assert_eq!(
-            reage(Acao::Sai, &mut lista, &mut partida),
+            react(Action::Quit, &mut list, &mut running),
             Some(ExitCode::SUCCESS)
         );
         assert_eq!(
-            reage(Acao::Interrompe, &mut lista, &mut partida),
+            react(Action::Interrupt, &mut list, &mut running),
             Some(ExitCode::from(130))
         );
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// A pasta que some entre a descoberta e o Enter dá o recado, e nada abre.
+    /// The folder that vanishes between discovery and Enter leaves the notice, and nothing opens.
     #[test]
-    fn enter_sem_tela_ou_sem_a_pasta_nao_abre_e_deixa_o_recado() {
-        let raiz = pasta_de_teste("lista-abre");
-        jogo_falso(&raiz, "bomberboom", "exit 0\n");
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        lista.tela = Err("sem tela X: o DISPLAY está vazio".to_string());
-        reage(Acao::Abre, &mut lista, &mut partida);
-        assert!(partida.is_none());
-        assert_eq!(recado(&lista), ("bomberboom não abre sem tela X", true));
+    fn enter_without_a_display_or_the_folder_opens_nothing_and_leaves_the_notice() {
+        let root = test_folder("list-open");
+        fake_game(&root, "bomberboom", "exit 0\n");
+        let mut list = list_of(&root);
+        let mut running = None;
+        list.display_check = Err("sem tela X: o DISPLAY está vazio".to_string());
+        react(Action::Open, &mut list, &mut running);
+        assert!(running.is_none());
+        assert_eq!(notice(&list), ("bomberboom não abre sem tela X", true));
 
-        lista.tela = Ok(());
-        std::fs::remove_dir_all(raiz.join("bomberboom")).unwrap();
-        reage(Acao::Abre, &mut lista, &mut partida);
-        assert!(partida.is_none());
-        let (texto, problema) = recado(&lista);
+        list.display_check = Ok(());
+        std::fs::remove_dir_all(root.join("bomberboom")).unwrap();
+        react(Action::Open, &mut list, &mut running);
+        assert!(running.is_none());
+        let (text, is_problem) = notice(&list);
         assert!(
-            texto.contains("bomberboom não existe") && problema,
-            "{texto}"
+            text.contains("bomberboom não existe") && is_problem,
+            "{text}"
         );
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Raiz sem jogo (outra pessoa, ou o `$JOGAR_RAIZ` errado): as teclas não quebram e nada abre.
+    /// A root with no game (someone else, or a wrong `$JOGAR_RAIZ`): the keys do not break and
+    /// nothing opens.
     #[test]
-    fn lista_vazia_nao_quebra_e_o_enter_nao_abre() {
-        let raiz = pasta_de_teste("lista-vazia");
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        for acao in [Acao::Sobe, Acao::Desce, Acao::Abre] {
-            assert_eq!(reage(acao, &mut lista, &mut partida), None);
+    fn the_empty_list_does_not_break_and_enter_opens_nothing() {
+        let root = test_folder("list-empty");
+        let mut list = list_of(&root);
+        let mut running = None;
+        for action in [Action::MoveUp, Action::MoveDown, Action::Open] {
+            assert_eq!(react(action, &mut list, &mut running), None);
         }
-        assert!(partida.is_none());
-        assert_eq!(lista.escolhido, 0);
-        assert!(
-            lista.recado.is_none(),
-            "{:?}",
-            lista.recado.map(|r| r.texto)
-        );
-        std::fs::remove_dir_all(&raiz).unwrap();
+        assert!(running.is_none());
+        assert_eq!(list.chosen, 0);
+        assert!(list.notice.is_none(), "{:?}", list.notice.map(|n| n.text));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// A lista se redescobre com o painel aberto; o jogo escolhido que some leva a escolha ao último
-    /// que sobrou, e não para fora da lista.
+    /// The list rediscovers itself with the panel open; a chosen game that vanishes moves the
+    /// choice to the last one left, and not out of the list.
     #[test]
-    fn a_escolha_fica_na_lista_quando_um_jogo_some() {
-        let raiz = pasta_de_teste("lista-some");
-        for pasta in ["a", "b", "c"] {
-            jogo_falso(&raiz, pasta, "exit 0\n");
+    fn the_choice_stays_in_the_list_when_a_game_vanishes() {
+        let root = test_folder("list-vanishes");
+        for folder in ["a", "b", "c"] {
+            fake_game(&root, folder, "exit 0\n");
         }
-        let mut lista = lista_de(&raiz);
-        lista.escolhido = 2;
-        std::fs::remove_dir_all(raiz.join("c")).unwrap();
-        lista.le_jogos();
-        assert_eq!(lista.escolhido, 1);
-        std::fs::remove_dir_all(&raiz).unwrap();
+        let mut list = list_of(&root);
+        list.chosen = 2;
+        std::fs::remove_dir_all(root.join("c")).unwrap();
+        list.reload_games();
+        assert_eq!(list.chosen, 1);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// O jogo cuja cópia do lançador comum difere da dos outros sai marcado (autor, 31/10).
+    /// The game whose copy of the shared launcher differs from the others' is marked (author,
+    /// 31/10).
     #[test]
-    fn a_lista_marca_o_jogo_cujo_lancador_destoa() {
-        let raiz = pasta_de_teste("lista-destoa");
-        jogo_falso(&raiz, "a", "exec love .\n");
-        jogo_falso(&raiz, "b", "exec love .\n");
-        jogo_falso(&raiz, "c", "exec love . # outra cópia\n");
-        let lista = lista_de(&raiz);
-        let marcas: Vec<(&str, bool)> = lista
-            .situacoes
+    fn the_list_marks_the_game_whose_launcher_differs() {
+        let root = test_folder("list-differs");
+        fake_game(&root, "a", "exec love .\n");
+        fake_game(&root, "b", "exec love .\n");
+        fake_game(&root, "c", "exec love . # another copy\n");
+        let list = list_of(&root);
+        let marks: Vec<(&str, bool)> = list
+            .entries
             .iter()
-            .map(|situacao| (situacao.jogo.pasta.as_str(), situacao.destoa))
+            .map(|entry| (entry.game.folder.as_str(), entry.launcher_differs))
             .collect();
-        assert_eq!(marcas, [("a", false), ("b", false), ("c", true)]);
-        std::fs::remove_dir_all(&raiz).unwrap();
+        assert_eq!(marks, [("a", false), ("b", false), ("c", true)]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn x_encerra_o_jogo_e_a_lista_volta_com_o_recado() {
-        let raiz = pasta_de_teste("partida-x");
-        let corpo = format!("echo 'BOMBERBOOM INICIO motor=love'\n{LANCADOR_COM_NETO}");
-        jogo_falso(&raiz, "bomberboom", &corpo);
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        reage(Acao::Abre, &mut lista, &mut partida);
+    fn x_stops_the_game_and_the_list_comes_back_with_the_notice() {
+        let root = test_folder("running-x");
+        let body = format!("echo 'BOMBERBOOM INICIO motor=love'\n{LAUNCHER_WITH_GRANDCHILD}");
+        fake_game(&root, "bomberboom", &body);
+        let mut list = list_of(&root);
+        let mut running = None;
+        react(Action::Open, &mut list, &mut running);
         assert!(
-            partida.is_some(),
-            "não abriu: {:?}",
-            lista.recado.map(|r| r.texto)
+            running.is_some(),
+            "did not open: {:?}",
+            list.notice.map(|n| n.text)
         );
-        let neto = espera_pid(&raiz.join("bomberboom/neto"), Duration::from_secs(3));
-        let prazo = Instant::now() + Duration::from_secs(3);
-        while partida.as_ref().unwrap().placar.total() == 0 {
+        let grandchild = wait_for_pid(&root.join("bomberboom/grandchild"), Duration::from_secs(3));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while running.as_ref().unwrap().scoreboard.total() == 0 {
             assert!(
-                Instant::now() < prazo,
-                "o fato do jogo de mentira não chegou"
+                Instant::now() < deadline,
+                "the fake game's fact did not arrive"
             );
-            acompanha(&mut lista, &mut partida);
+            tick(&mut list, &mut running);
             thread::sleep(Duration::from_millis(20));
         }
-        reage(Acao::Desce, &mut lista, &mut partida);
-        reage(Acao::Desce, &mut lista, &mut partida);
-        assert_eq!(partida.as_ref().unwrap().rolagem, 0, "um tipo só: não rola");
-
-        reage(Acao::Encerra, &mut lista, &mut partida);
-        espera_o_fim(&mut lista, &mut partida);
-        let (texto, problema) = recado(&lista);
-        assert!(
-            texto.starts_with("bomberboom encerrado depois de 00:0"),
-            "{texto}"
-        );
-        assert!(texto.ends_with("· 1 fatos") && !problema, "{texto}");
-        assert!(
-            morre_em(neto, Duration::from_secs(3)),
-            "o neto {neto} sobrou"
-        );
-        std::fs::remove_dir_all(&raiz).unwrap();
-    }
-
-    #[test]
-    fn jogo_que_morre_deixa_o_codigo_e_o_erro_no_recado() {
-        let raiz = pasta_de_teste("partida-morre");
-        jogo_falso(
-            &raiz,
-            "bomberboom",
-            "echo 'Error: sem runtime' >&2\nexit 2\n",
-        );
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        reage(Acao::Abre, &mut lista, &mut partida);
-        espera_o_fim(&mut lista, &mut partida);
+        react(Action::MoveDown, &mut list, &mut running);
+        react(Action::MoveDown, &mut list, &mut running);
         assert_eq!(
-            recado(&lista),
-            ("bomberboom saiu com 2 · Error: sem runtime", true)
+            running.as_ref().unwrap().scroll,
+            0,
+            "a single type: no scrolling"
         );
-        std::fs::remove_dir_all(&raiz).unwrap();
+
+        react(Action::StopGame, &mut list, &mut running);
+        wait_for_the_end(&mut list, &mut running);
+        let (text, is_problem) = notice(&list);
+        assert!(
+            text.starts_with("bomberboom encerrado depois de 00:0"),
+            "{text}"
+        );
+        assert!(text.ends_with("· 1 fatos") && !is_problem, "{text}");
+        assert!(
+            dies_within(grandchild, Duration::from_secs(3)),
+            "the grandchild {grandchild} was left over"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn ctrl_c_com_o_jogo_aberto_fecha_o_jogo_e_sai_com_130() {
-        let raiz = pasta_de_teste("partida-ctrl-c");
-        jogo_falso(&raiz, "bomberboom", LANCADOR_COM_NETO);
-        let mut lista = lista_de(&raiz);
-        let mut partida = None;
-        reage(Acao::Abre, &mut lista, &mut partida);
-        assert!(
-            partida.is_some(),
-            "não abriu: {:?}",
-            lista.recado.map(|r| r.texto)
+    fn a_game_that_dies_leaves_its_code_and_its_error_in_the_notice() {
+        let root = test_folder("running-dies");
+        fake_game(
+            &root,
+            "bomberboom",
+            "echo 'Error: no runtime' >&2\nexit 2\n",
         );
-        let neto = espera_pid(&raiz.join("bomberboom/neto"), Duration::from_secs(3));
-        let saida = reage(Acao::Interrompe, &mut lista, &mut partida);
-        assert_eq!(saida, Some(ExitCode::from(130)));
-        assert!(
-            morre_em(neto, Duration::from_secs(1)),
-            "o neto {neto} sobrou"
+        let mut list = list_of(&root);
+        let mut running = None;
+        react(Action::Open, &mut list, &mut running);
+        wait_for_the_end(&mut list, &mut running);
+        assert_eq!(
+            notice(&list),
+            ("bomberboom saiu com 2 · Error: no runtime", true)
         );
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn ctrl_c_with_the_game_open_closes_the_game_and_exits_with_130() {
+        let root = test_folder("running-ctrl-c");
+        fake_game(&root, "bomberboom", LAUNCHER_WITH_GRANDCHILD);
+        let mut list = list_of(&root);
+        let mut running = None;
+        react(Action::Open, &mut list, &mut running);
+        assert!(
+            running.is_some(),
+            "did not open: {:?}",
+            list.notice.map(|n| n.text)
+        );
+        let grandchild = wait_for_pid(&root.join("bomberboom/grandchild"), Duration::from_secs(3));
+        let exit = react(Action::Interrupt, &mut list, &mut running);
+        assert_eq!(exit, Some(ExitCode::from(130)));
+        assert!(
+            dies_within(grandchild, Duration::from_secs(1)),
+            "the grandchild {grandchild} was left over"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

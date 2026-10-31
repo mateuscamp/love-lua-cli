@@ -1,177 +1,181 @@
-//! Os jogos da raiz (`~/lua`) e o comando que abre cada um pelo lançador comum.
+//! The games in the root (`~/lua`) and the command that opens each one through the shared launcher.
 //!
-//! Este programa não sabe abrir o LÖVE. Todo jogo traz o mesmo lançador, `tools/love`, que confere
-//! o runtime contra o `runtime.lock` do projeto e limpa o ambiente; aqui só se chama esse lançador
-//! de dentro da pasta do jogo. Jogo é toda pasta da raiz com um `tools/love` executável (autor,
-//! 31/10): pôr um jogo é pôr a pasta, sem mexer aqui. A regra do lançador comum mora no README.
+//! This program does not know how to open LÖVE. Every game carries the same launcher, `tools/love`,
+//! which checks the runtime against the project's `runtime.lock` and cleans the environment; here
+//! that launcher is only called from inside the game's folder. A game is any folder in the root
+//! with an executable `tools/love` (author, 31/10): adding a game is adding the folder, without
+//! touching this code. The shared launcher rule lives in the README.
 
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 
-/// O lançador comum, relativo à pasta do jogo, e o argumento dele: a própria pasta. Desde 28/10 os
-/// jogos de `~/lua` abrem todos assim (o Boomlitude foi o último a trocar, Compositando/boomlitude#5).
-pub const LANCADOR: [&str; 2] = ["tools/love", "."];
+/// The shared launcher, relative to the game's folder, and its argument: the folder itself. Since
+/// 28/10 the games in `~/lua` all open this way (Boomlitude was the last to switch,
+/// Compositando/boomlitude#5).
+pub const LAUNCHER: [&str; 2] = ["tools/love", "."];
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Jogo {
-    /// A pasta dentro da raiz: é o nome mostrado e o que se digita em `jogar <jogo>`. O prefixo
-    /// dos fatos que o jogo escreve é ela em maiúsculas.
-    pub pasta: String,
+pub struct Game {
+    /// The folder inside the root: it is the name shown and what one types in `jogar <game>`. The
+    /// prefix of the facts the game writes is this folder in uppercase.
+    pub folder: String,
 }
 
-/// Os jogos de `raiz`, em ordem alfabética sem olhar a caixa: as pastas com `tools/love`
-/// executável. Raiz que não se lê dá a lista vazia, que o painel explica; pasta cujo nome não é
-/// UTF-8 fica de fora.
-pub fn descobre(raiz: &Path) -> Vec<Jogo> {
-    let Ok(entradas) = std::fs::read_dir(raiz) else {
+/// The games in `root`, in alphabetical order ignoring case: the folders with an executable
+/// `tools/love`. A root that cannot be read gives the empty list, which the panel explains; a
+/// folder whose name is not UTF-8 is left out.
+pub fn discover(root: &Path) -> Vec<Game> {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
-    let mut jogos: Vec<Jogo> = entradas
-        .filter_map(|entrada| entrada.ok()?.file_name().into_string().ok())
-        .filter(|pasta| tem_lancador(&raiz.join(pasta)))
-        .map(|pasta| Jogo { pasta })
+    let mut games: Vec<Game> = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|folder| has_launcher(&root.join(folder)))
+        .map(|folder| Game { folder })
         .collect();
-    jogos.sort_by_key(|jogo| jogo.pasta.to_lowercase());
-    jogos
+    games.sort_by_key(|game| game.folder.to_lowercase());
+    games
 }
 
-/// Se `pasta` tem o `tools/love` como arquivo executável por alguém (dono, grupo ou outros). O
-/// link simbólico vale pelo arquivo a que aponta.
-fn tem_lancador(pasta: &Path) -> bool {
-    std::fs::metadata(pasta.join(LANCADOR[0]))
+/// Whether `folder` has `tools/love` as a file executable by someone (owner, group or others). A
+/// symbolic link counts as the file it points to.
+fn has_launcher(folder: &Path) -> bool {
+    std::fs::metadata(folder.join(LAUNCHER[0]))
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
-/// O jogo de `raiz` cuja pasta é `nome`, sem olhar a caixa.
-pub fn procura(raiz: &Path, nome: &str) -> Option<Jogo> {
-    descobre(raiz)
+/// The game in `root` whose folder is `name`, ignoring case.
+pub fn find_game(root: &Path, name: &str) -> Option<Game> {
+    discover(root)
         .into_iter()
-        .find(|jogo| jogo.pasta.eq_ignore_ascii_case(nome))
+        .find(|game| game.folder.eq_ignore_ascii_case(name))
 }
 
-/// O comando que abre `jogo` a partir de `raiz`, com `extras` depois da pasta (é onde o lançador
-/// comum aceita o `--config=`). O programa vai absoluto: o `Command` não promete resolver o
-/// relativo a partir do `current_dir`.
-fn comando(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Command {
-    let pasta = raiz.join(&jogo.pasta);
-    let [programa, argumento] = LANCADOR;
-    let mut comando = Command::new(pasta.join(programa));
-    comando.arg(argumento).args(extras).current_dir(pasta);
-    comando
+/// The command that opens `game` from `root`, with `extra_args` after the folder (that is where the
+/// shared launcher takes `--config=`). The program goes as an absolute path: `Command` does not
+/// promise to resolve a relative one from `current_dir`.
+fn launch_command(root: &Path, game: &Game, extra_args: &[String]) -> Command {
+    let folder = root.join(&game.folder);
+    let [program, argument] = LAUNCHER;
+    let mut command = Command::new(folder.join(program));
+    command.arg(argument).args(extra_args).current_dir(folder);
+    command
 }
 
-/// A pasta do jogo, ou o erro de uma linha quando ela sumiu depois da descoberta.
-fn pasta_do(raiz: &Path, jogo: &Jogo) -> Result<PathBuf, String> {
-    let pasta = raiz.join(&jogo.pasta);
-    if pasta.is_dir() {
-        Ok(pasta)
+/// The game's folder, or the one-line error when it vanished after discovery.
+fn existing_folder(root: &Path, game: &Game) -> Result<PathBuf, String> {
+    let folder = root.join(&game.folder);
+    if folder.is_dir() {
+        Ok(folder)
     } else {
         Err(format!(
             "{}: a pasta {} não existe",
-            jogo.pasta,
-            pasta.display()
+            game.folder,
+            folder.display()
         ))
     }
 }
 
-fn nao_abriu(jogo: &Jogo, erro: std::io::Error) -> String {
+fn launch_failed(game: &Game, error: std::io::Error) -> String {
     format!(
-        "{}: o lançador {} não abriu: {erro}",
-        jogo.pasta,
-        LANCADOR.join(" ")
+        "{}: o lançador {} não abriu: {error}",
+        game.folder,
+        LAUNCHER.join(" ")
     )
 }
 
-/// O código de saída do lançador como o shell daria: 128 + sinal se ele morreu por sinal.
-pub fn codigo(estado: ExitStatus) -> u8 {
-    let codigo = estado
+/// The launcher's exit code as the shell would give it: 128 + signal if it died by a signal.
+pub fn exit_code(status: ExitStatus) -> u8 {
+    let code = status
         .code()
-        .or(estado.signal().map(|sinal| 128 + sinal))
+        .or(status.signal().map(|signal| 128 + signal))
         .unwrap_or(1);
-    u8::try_from(codigo).unwrap_or(1)
+    u8::try_from(code).unwrap_or(1)
 }
 
-/// Abre o jogo com o terminal dele (o modo direto, `jogar <jogo>`) e espera ele fechar. Devolve o
-/// código de saída do lançador, ou o erro de antes de ele abrir.
-pub fn abre(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Result<u8, String> {
-    pasta_do(raiz, jogo)?;
-    let estado = comando(raiz, jogo, extras)
+/// Opens the game with its own terminal (the direct mode, `jogar <game>`) and waits for it to
+/// close. Returns the launcher's exit code, or the error from before it opened.
+pub fn run_attached(root: &Path, game: &Game, extra_args: &[String]) -> Result<u8, String> {
+    existing_folder(root, game)?;
+    let status = launch_command(root, game, extra_args)
         .status()
-        .map_err(|erro| nao_abriu(jogo, erro))?;
-    Ok(codigo(estado))
+        .map_err(|error| launch_failed(game, error))?;
+    Ok(exit_code(status))
 }
 
-/// Sobe o jogo para o painel e não espera. Sem terminal: stdin nulo, para não disputar as teclas
-/// com o painel, e stdout e stderr num cano, que o painel lê. Num grupo de processos próprio, com
-/// o pid do lançador, para o `x` do painel encerrar o lançador e o LÖVE juntos.
-pub fn sobe(raiz: &Path, jogo: &Jogo) -> Result<Child, String> {
-    pasta_do(raiz, jogo)?;
-    comando(raiz, jogo, &[])
+/// Starts the game for the panel and does not wait. No terminal: null stdin, so as not to fight the
+/// panel for the keys, and stdout and stderr into a pipe, which the panel reads. In its own process
+/// group, with the launcher's pid, so the panel's `x` ends the launcher and LÖVE together.
+pub fn spawn_piped(root: &Path, game: &Game) -> Result<Child, String> {
+    existing_folder(root, game)?;
+    launch_command(root, game, &[])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
-        .map_err(|erro| nao_abriu(jogo, erro))
+        .map_err(|error| launch_failed(game, error))
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
-    use crate::test_support::{jogo_falso, pasta_de_teste};
+    use crate::test_support::{fake_game, test_folder};
     use std::io::{BufRead, BufReader};
 
-    /// As pastas dos `jogos`, na ordem, para comparar de uma vez.
-    fn pastas(jogos: &[Jogo]) -> Vec<&str> {
-        jogos.iter().map(|jogo| jogo.pasta.as_str()).collect()
+    /// The folders of `games`, in order, to compare at once.
+    fn folders(games: &[Game]) -> Vec<&str> {
+        games.iter().map(|game| game.folder.as_str()).collect()
     }
 
-    /// Jogo é a pasta com `tools/love` executável (autor, 31/10). Fica de fora a pasta sem ele, a
-    /// com ele sem o bit de execução, a com `tools/love` que é pasta, e o arquivo solto na raiz. A
-    /// ordem não olha a caixa: pela tabela ASCII, o `Zumbi` viria antes.
+    /// A game is the folder with an executable `tools/love` (author, 31/10). Left out: the folder
+    /// without it, the one with it but without the execute bit, the one whose `tools/love` is a
+    /// folder, and the loose file in the root. The order ignores case: by the ASCII table, `Zumbi`
+    /// would come first.
     #[test]
-    fn descobre_as_pastas_com_tools_love_executavel_em_ordem() {
-        let raiz = pasta_de_teste("descobre");
-        for pasta in ["gods", "Zumbi", "campcrawler"] {
-            jogo_falso(&raiz, pasta, "exit 0\n");
+    fn discover_finds_the_folders_with_executable_tools_love_in_order() {
+        let root = test_folder("discover");
+        for folder in ["gods", "Zumbi", "campcrawler"] {
+            fake_game(&root, folder, "exit 0\n");
         }
-        std::fs::create_dir_all(raiz.join("anticolonia/assets")).unwrap();
-        std::fs::create_dir_all(raiz.join("pasta-love/tools/love")).unwrap();
-        std::fs::create_dir_all(raiz.join("sem-bit/tools")).unwrap();
-        std::fs::write(raiz.join("sem-bit/tools/love"), "#!/bin/sh\n").unwrap();
-        std::fs::write(raiz.join("solto.txt"), "não é jogo").unwrap();
-        let jogos = descobre(&raiz);
-        assert_eq!(pastas(&jogos), ["campcrawler", "gods", "Zumbi"]);
-        std::fs::remove_dir_all(&raiz).unwrap();
+        std::fs::create_dir_all(root.join("anticolonia/assets")).unwrap();
+        std::fs::create_dir_all(root.join("love-folder/tools/love")).unwrap();
+        std::fs::create_dir_all(root.join("no-bit/tools")).unwrap();
+        std::fs::write(root.join("no-bit/tools/love"), "#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("loose.txt"), "not a game").unwrap();
+        let games = discover(&root);
+        assert_eq!(folders(&games), ["campcrawler", "gods", "Zumbi"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn raiz_que_nao_existe_nao_tem_jogos() {
-        let casa = pasta_de_teste("sem-raiz");
-        assert_eq!(descobre(&casa.join("lua")), []);
-        std::fs::remove_dir_all(&casa).unwrap();
+    fn a_root_that_does_not_exist_has_no_games() {
+        let home = test_folder("no-root");
+        assert_eq!(discover(&home.join("lua")), []);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]
-    fn procura_pela_pasta_sem_olhar_a_caixa() {
-        let raiz = pasta_de_teste("procura");
-        jogo_falso(&raiz, "campcrawler", "exit 0\n");
-        let achado = procura(&raiz, "CampCrawler").map(|jogo| jogo.pasta);
-        assert_eq!(achado.as_deref(), Some("campcrawler"));
-        assert_eq!(procura(&raiz, "camcrawler"), None);
-        std::fs::remove_dir_all(&raiz).unwrap();
+    fn find_game_matches_the_folder_ignoring_case() {
+        let root = test_folder("find-game");
+        fake_game(&root, "campcrawler", "exit 0\n");
+        let found = find_game(&root, "CampCrawler").map(|game| game.folder);
+        assert_eq!(found.as_deref(), Some("campcrawler"));
+        assert_eq!(find_game(&root, "camcrawler"), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Todo jogo abre pelo lançador comum, absoluto, de dentro da pasta, com os extras depois dela.
+    /// Every game opens through the shared launcher, as an absolute path, from inside its folder,
+    /// with the extra arguments after the folder.
     #[test]
-    fn o_lancador_comum_roda_na_pasta_do_jogo_com_os_extras_depois() {
-        let extras = ["--config=bomberboom.seed=3".to_string()];
-        let jogo = Jogo {
-            pasta: "bomberboom".to_string(),
+    fn the_shared_launcher_runs_in_the_game_folder_with_the_extras_after() {
+        let extra_args = ["--config=bomberboom.seed=3".to_string()];
+        let game = Game {
+            folder: "bomberboom".to_string(),
         };
-        let c = comando(Path::new("/r"), &jogo, &extras);
+        let c = launch_command(Path::new("/r"), &game, &extra_args);
         assert_eq!(c.get_program(), "/r/bomberboom/tools/love");
         assert_eq!(
             c.get_args().collect::<Vec<_>>(),
@@ -180,50 +184,50 @@ mod testes {
         assert_eq!(c.get_current_dir(), Some(Path::new("/r/bomberboom")));
     }
 
-    /// Um BomberBoom de mentira: o `tools/love` dele escreve um fato no stdout (com a pasta, o
-    /// argumento e o grupo de processos em que rodou) e um erro no stderr.
-    fn bomberboom_falso(raiz: &Path) {
-        jogo_falso(
-            raiz,
+    /// A fake BomberBoom: its `tools/love` writes a fact to stdout (with the folder, the argument
+    /// and the process group it ran in) and an error to stderr.
+    fn fake_bomberboom(root: &Path) {
+        fake_game(
+            root,
             "bomberboom",
             "echo \"BOMBERBOOM INICIO pasta=$(basename \"$PWD\") arg=$1 \
              grupo=$(cut -d' ' -f5 /proc/$$/stat)\"\n\
-             echo 'Error: de mentira' >&2\n",
+             echo 'Error: fake' >&2\n",
         );
     }
 
     #[test]
-    fn sobe_roda_o_lancador_na_pasta_num_grupo_proprio_com_a_saida_num_cano() {
-        let raiz = pasta_de_teste("sobe");
-        bomberboom_falso(&raiz);
-        let jogo = Jogo {
-            pasta: "bomberboom".to_string(),
+    fn spawn_piped_runs_the_launcher_in_the_folder_in_its_own_group_with_a_pipe() {
+        let root = test_folder("spawn-piped");
+        fake_bomberboom(&root);
+        let game = Game {
+            folder: "bomberboom".to_string(),
         };
-        let mut filho = sobe(&raiz, &jogo).unwrap();
-        let saida = BufReader::new(filho.stdout.take().unwrap());
-        let erro = BufReader::new(filho.stderr.take().unwrap());
-        let linhas: Vec<String> = saida.lines().map(Result::unwrap).collect();
-        let erros: Vec<String> = erro.lines().map(Result::unwrap).collect();
-        // O grupo é o do próprio lançador, para o painel encerrar o lançador e o LÖVE juntos.
-        let esperado = format!(
+        let mut child = spawn_piped(&root, &game).unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stderr = BufReader::new(child.stderr.take().unwrap());
+        let lines: Vec<String> = stdout.lines().map(Result::unwrap).collect();
+        let errors: Vec<String> = stderr.lines().map(Result::unwrap).collect();
+        // The group is the launcher's own, so the panel ends the launcher and LÖVE together.
+        let expected = format!(
             "BOMBERBOOM INICIO pasta=bomberboom arg=. grupo={}",
-            filho.id()
+            child.id()
         );
-        assert_eq!(linhas, [esperado]);
-        assert_eq!(erros, ["Error: de mentira"]);
-        assert_eq!(codigo(filho.wait().unwrap()), 0);
-        std::fs::remove_dir_all(&raiz).unwrap();
+        assert_eq!(lines, [expected]);
+        assert_eq!(errors, ["Error: fake"]);
+        assert_eq!(exit_code(child.wait().unwrap()), 0);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// A pasta que some entre a descoberta e o Enter.
+    /// The folder that vanishes between discovery and Enter.
     #[test]
-    fn sobe_sem_a_pasta_do_jogo_diz_qual() {
-        let raiz = pasta_de_teste("sobe-sem-pasta");
-        let jogo = Jogo {
-            pasta: "campcrawler".to_string(),
+    fn spawn_piped_without_the_game_folder_says_which() {
+        let root = test_folder("spawn-no-folder");
+        let game = Game {
+            folder: "campcrawler".to_string(),
         };
-        let erro = sobe(&raiz, &jogo).unwrap_err();
-        assert!(erro.contains("campcrawler não existe"), "{erro}");
-        std::fs::remove_dir_all(&raiz).unwrap();
+        let error = spawn_piped(&root, &game).unwrap_err();
+        assert!(error.contains("campcrawler não existe"), "{error}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

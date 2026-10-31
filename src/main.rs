@@ -1,9 +1,11 @@
-//! `jogar`: escolhe um dos jogos LÖVE da raiz (`~/lua`) e abre pelo lançador comum, `tools/love`.
+//! `jogar`: picks one of the LÖVE games in the root (`~/lua`) and opens it through the shared
+//! launcher, `tools/love`.
 //!
-//! Sem argumento, o painel em tela cheia (`painel`); com o nome de um jogo, abre direto, com o
-//! terminal do jogo. Os módulos: `jogos` (a descoberta e o comando que abre), `lancador_comum` (a
-//! cópia do lançador em cada jogo), `tela` (o X antes de abrir), `obra` (o git da pasta de cada
-//! jogo), `fatos` (o que o jogo escreve enquanto roda) e `painel` (o único que fala com o terminal).
+//! With no argument, the full-screen panel (`panel`); with a game's name, it opens it directly,
+//! with the game's own terminal. The modules: `games` (discovery and the command that opens a
+//! game), `shared_launcher` (each game's copy of the launcher), `x_display` (the X server before
+//! opening), `git_state` (the git of each game's folder), `facts` (what the game writes while it
+//! runs) and `panel` (the only one that talks to the terminal).
 
 mod facts;
 mod games;
@@ -19,15 +21,15 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-fn ajuda(raiz: &Path) -> String {
-    let encontrados: Vec<String> = games::descobre(raiz)
+fn help_text(root: &Path) -> String {
+    let found: Vec<String> = games::discover(root)
         .into_iter()
-        .map(|jogo| jogo.pasta)
+        .map(|game| game.folder)
         .collect();
-    let lista = if encontrados.is_empty() {
+    let list = if found.is_empty() {
         "nenhum (um jogo é uma pasta com tools/love executável)".to_string()
     } else {
-        encontrados.join(", ")
+        found.join(", ")
     };
     format!(
         "jogar: abre um dos jogos LÖVE de {} pelo lançador comum, tools/love.\n\
@@ -38,99 +40,97 @@ fn ajuda(raiz: &Path) -> String {
          \x20                          ex.: jogar campcrawler --config=campcrawler.lang=pt_BR\n\
          \n\
          A raiz é $JOGAR_RAIZ, ou ~/lua.\n\
-         jogos: {lista}\n",
-        raiz.display()
+         jogos: {list}\n",
+        root.display()
     )
 }
 
-/// `jogar <jogo> [args...]`: confere a tela, abre com o terminal do jogo e sai com o código dele.
-fn direto(raiz: &Path, nome: &str, extras: &[String]) -> ExitCode {
-    let Some(jogo) = games::procura(raiz, nome) else {
-        eprint!("jogar: não conheço o jogo {nome:?}\n\n{}", ajuda(raiz));
+/// `jogar <game> [args...]`: checks the X display, opens the game with its own terminal and exits
+/// with its code.
+fn open_directly(root: &Path, name: &str, extra_args: &[String]) -> ExitCode {
+    let Some(game) = games::find_game(root, name) else {
+        eprint!("jogar: não conheço o jogo {name:?}\n\n{}", help_text(root));
         return ExitCode::from(2);
     };
-    if let Err(aviso) = x_display::tela() {
-        eprintln!("jogar: {} não abre: {aviso}", jogo.pasta);
+    if let Err(warning) = x_display::check_this_display() {
+        eprintln!("jogar: {} não abre: {warning}", game.folder);
         return ExitCode::from(2);
     }
-    match games::abre(raiz, &jogo, extras) {
-        Ok(codigo) => ExitCode::from(codigo),
-        Err(erro) => {
-            eprintln!("jogar: {erro}");
+    match games::run_attached(root, &game, extra_args) {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("jogar: {error}");
             ExitCode::from(2)
         }
     }
 }
 
-/// A raiz dos jogos: `escolhida` (o `$JOGAR_RAIZ`) quando não vazia, senão `casa/lua`. Sem as
-/// duas, o erro de uma linha.
-fn raiz_dos_jogos(casa: Option<OsString>, escolhida: Option<OsString>) -> Result<PathBuf, String> {
-    if let Some(escolhida) = escolhida.filter(|escolhida| !escolhida.is_empty()) {
-        return Ok(PathBuf::from(escolhida));
+/// The games' root: `chosen` (the `$JOGAR_RAIZ`) when not empty, else `home/lua`. Without either,
+/// the one-line error.
+fn games_root(home: Option<OsString>, chosen: Option<OsString>) -> Result<PathBuf, String> {
+    if let Some(chosen) = chosen.filter(|chosen| !chosen.is_empty()) {
+        return Ok(PathBuf::from(chosen));
     }
-    casa.map(|casa| PathBuf::from(casa).join("lua"))
+    home.map(|home| PathBuf::from(home).join("lua"))
         .ok_or_else(|| "$HOME não está definido, e nem $JOGAR_RAIZ".to_string())
 }
 
 fn main() -> ExitCode {
-    let raiz = match raiz_dos_jogos(env::var_os("HOME"), env::var_os("JOGAR_RAIZ")) {
-        Ok(raiz) => raiz,
-        Err(erro) => {
-            eprintln!("jogar: {erro}");
+    let root = match games_root(env::var_os("HOME"), env::var_os("JOGAR_RAIZ")) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("jogar: {error}");
             return ExitCode::from(2);
         }
     };
-    let argumentos: Vec<String> = env::args().skip(1).collect();
-    match argumentos.split_first() {
-        None => panel::menu(&raiz),
-        Some((nome, _)) if nome == "-h" || nome == "--help" => {
-            print!("{}", ajuda(&raiz));
+    let args: Vec<String> = env::args().skip(1).collect();
+    match args.split_first() {
+        None => panel::menu(&root),
+        Some((name, _)) if name == "-h" || name == "--help" => {
+            print!("{}", help_text(&root));
             ExitCode::SUCCESS
         }
-        Some((nome, extras)) => direto(&raiz, nome, extras),
+        Some((name, extra_args)) => open_directly(&root, name, extra_args),
     }
 }
 
 #[cfg(test)]
-mod testes {
+mod tests {
     use super::*;
 
-    /// O `$JOGAR_RAIZ` põe a raiz em outro lugar (para quem não guarda os jogos em `~/lua`); vazio,
-    /// vale o `~/lua`.
+    /// `$JOGAR_RAIZ` puts the root somewhere else (for whoever does not keep the games in
+    /// `~/lua`); when empty, `~/lua` holds.
     #[test]
-    fn a_raiz_vem_do_jogar_raiz_ou_do_lua_da_casa() {
-        let casa = Some(OsString::from("/c"));
-        let escolhida = Some(OsString::from("/jogos"));
+    fn the_root_comes_from_jogar_raiz_or_from_lua_in_home() {
+        let home = Some(OsString::from("/c"));
+        let chosen = Some(OsString::from("/games"));
+        assert_eq!(games_root(home.clone(), None), Ok(PathBuf::from("/c/lua")));
         assert_eq!(
-            raiz_dos_jogos(casa.clone(), None),
+            games_root(home.clone(), chosen.clone()),
+            Ok(PathBuf::from("/games"))
+        );
+        assert_eq!(games_root(None, chosen), Ok(PathBuf::from("/games")));
+        assert_eq!(
+            games_root(home, Some(OsString::new())),
             Ok(PathBuf::from("/c/lua"))
         );
-        assert_eq!(
-            raiz_dos_jogos(casa.clone(), escolhida.clone()),
-            Ok(PathBuf::from("/jogos"))
-        );
-        assert_eq!(raiz_dos_jogos(None, escolhida), Ok(PathBuf::from("/jogos")));
-        assert_eq!(
-            raiz_dos_jogos(casa, Some(OsString::new())),
-            Ok(PathBuf::from("/c/lua"))
-        );
-        assert!(raiz_dos_jogos(None, None).is_err());
+        assert!(games_root(None, None).is_err());
     }
 
-    /// Auditoria de 28/10, achado A3: o AGENTS.md dizia Rust 1.85+, e o ratatui 0.30 pede 1.88. A
-    /// versão mínima mora no `rust-version` do Cargo.toml, que o cargo cobra, e o AGENTS.md diz a
-    /// mesma.
+    /// Audit of 28/10, finding A3: AGENTS.md said Rust 1.85+, and ratatui 0.30 needs 1.88. The
+    /// minimum version lives in Cargo.toml's `rust-version`, which cargo enforces, and AGENTS.md
+    /// states the same one.
     #[test]
-    fn agents_md_diz_a_versao_do_rust_do_cargo_toml() {
-        let versao = include_str!("../Cargo.toml")
+    fn agents_md_states_the_rust_version_from_cargo_toml() {
+        let version = include_str!("../Cargo.toml")
             .lines()
-            .find_map(|linha| linha.strip_prefix("rust-version = \""))
-            .and_then(|resto| resto.strip_suffix('"'))
-            .expect("o Cargo.toml não diz o rust-version");
-        let esperado = format!("Rust {versao}+");
+            .find_map(|line| line.strip_prefix("rust-version = \""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("Cargo.toml does not state the rust-version");
+        let expected = format!("Rust {version}+");
         assert!(
-            include_str!("../AGENTS.md").contains(&esperado),
-            "o AGENTS.md não diz {esperado}"
+            include_str!("../AGENTS.md").contains(&expected),
+            "AGENTS.md does not state {expected}"
         );
     }
 }
