@@ -1,4 +1,4 @@
-//! A tela X antes de abrir. Os três lançadores forçam `SDL_VIDEO_DRIVER=x11`, e sem X o jogo
+//! A tela X antes de abrir. Os quatro lançadores forçam `SDL_VIDEO_DRIVER=x11`, e sem X o jogo
 //! morre no boot com um stack trace ("x11 not available"); isto avisa antes, numa linha.
 
 use std::env;

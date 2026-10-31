@@ -23,7 +23,7 @@ lançador, a branch, as mudanças sem commit e o último commit do escolhido.
 ││  BomberBoom     ││ pasta     ~/lua/boomlitude                              ││
 ││▶ Boomlitude ●   ││ lançador  tools/love .                                  ││
 ││  CampCrawler    ││ branch    r0-pendencias ● em obra                       ││
-││                 ││ mudanças  5 mudanças sem commit                         ││
+││  Gods           ││ mudanças  5 mudanças sem commit                         ││
 ││                 ││ último    48f0ad1 · há 12m                              ││
 ││                 ││           O mostrado acompanha as passagens (A8)        ││
 │╰─────────────────╯╰─────────────────────────────────────────────────────────╯│
@@ -59,7 +59,7 @@ quantas vezes veio, há quanto tempo e o último valor. A linha que acabou de mu
 
 ## Sem tela X
 
-Os três lançadores forçam o X11 (`SDL_VIDEO_DRIVER=x11`). Antes de abrir, o `jogar` confere se
+Os quatro lançadores forçam o X11 (`SDL_VIDEO_DRIVER=x11`). Antes de abrir, o `jogar` confere se
 há um X atendendo no `DISPLAY` deste terminal. Se não houver, o painel avisa no título e embaixo,
 e o Enter não abre nada; `jogar <jogo>` sai com 2 numa linha, em vez do stack trace do LÖVE
 ("x11 not available"). Um terminal novo, ou `export DISPLAY=:0`, resolve.
@@ -79,6 +79,10 @@ ln /tmp/.X11-unix/X0_ /tmp/.X11-unix/X0
 | BomberBoom  | `tools/love .`                           |
 | Boomlitude  | `tools/love .`                           |
 | CampCrawler | `tools/love .`                           |
+| Gods        | `tools/love .`                           |
+
+O Gods está em reescrita (Godot para LÖVE). Até a fase da mesa da batalha, ele abre só uma tela
+de prova: fundo escuro e um retângulo magenta no centro.
 
 Se um projeto mudar o lançador, ou para pôr outro jogo, mude a tabela `JOGOS` em
 [`src/jogos.rs`](src/jogos.rs) e reinstale.

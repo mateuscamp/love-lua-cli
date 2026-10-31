@@ -34,6 +34,11 @@ pub const JOGOS: &[Jogo] = &[
         pasta: "campcrawler",
         lancador: &["tools/love", "."],
     },
+    Jogo {
+        nome: "Gods",
+        pasta: "gods",
+        lancador: &["tools/love", "."],
+    },
 ];
 
 pub fn procura(nome: &str) -> Option<&'static Jogo> {
@@ -42,7 +47,7 @@ pub fn procura(nome: &str) -> Option<&'static Jogo> {
         .find(|jogo| jogo.pasta.eq_ignore_ascii_case(nome))
 }
 
-/// O comando que abre `jogo` a partir de `raiz`, com `extras` depois da pasta (é onde os três
+/// O comando que abre `jogo` a partir de `raiz`, com `extras` depois da pasta (é onde os quatro
 /// lançadores aceitam o `--config=`). O programa relativo vira absoluto: o `Command` não promete
 /// resolvê-lo a partir do `current_dir`.
 fn comando(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Command {
@@ -125,6 +130,22 @@ mod testes {
         assert!(procura("camcrawler").is_none());
     }
 
+    /// O Gods entrou em 31/10, a pedido do autor, ainda na F1 da reescrita: até a F3, segundo a
+    /// orquestradora dele, `tools/love .` abre só a vista mínima (o retângulo magenta provisório).
+    /// A pasta vai escrita por extenso: o `procura` ignora a caixa, mas o disco não (`~/lua/Gods`
+    /// não existe), e nada mais na suíte a prendia.
+    #[test]
+    fn a_lista_tem_os_quatro_jogos_em_ordem() {
+        let nomes: Vec<&str> = JOGOS.iter().map(|jogo| jogo.nome).collect();
+        assert_eq!(nomes, ["BomberBoom", "Boomlitude", "CampCrawler", "Gods"]);
+        let pastas_da_lista: Vec<&str> = JOGOS.iter().map(|jogo| jogo.pasta).collect();
+        assert_eq!(
+            pastas_da_lista,
+            ["bomberboom", "boomlitude", "campcrawler", "gods"]
+        );
+        assert_eq!(procura("gods").map(|j| j.nome), Some("Gods"));
+    }
+
     #[test]
     fn lancador_com_barra_vira_caminho_absoluto_na_pasta_do_jogo() {
         let extras = ["--config=bomberboom.seed=3".to_string()];
@@ -140,7 +161,7 @@ mod testes {
     /// O lançador comum, `tools/love`, chegou ao Boomlitude em 28/10 (Compositando/boomlitude#5),
     /// no lugar do `luajit ferramentas/love/lanca.lua`, que saiu do `main` dele.
     #[test]
-    fn os_tres_jogos_abrem_pelo_tools_love_da_pasta() {
+    fn todos_os_jogos_abrem_pelo_tools_love_da_pasta() {
         for jogo in JOGOS {
             let c = comando(Path::new("/r"), jogo, &[]);
             let pasta = Path::new("/r").join(jogo.pasta);

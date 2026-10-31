@@ -160,7 +160,7 @@ impl Lista {
         }
     }
 
-    /// Relê o git de cada pasta e a tela X (uns 15 ms para os três jogos).
+    /// Relê o git de cada pasta e a tela X (uns 15 ms para três jogos, medido antes do Gods).
     fn le(&mut self) {
         self.situacoes = JOGOS
             .iter()
