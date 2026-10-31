@@ -1,5 +1,5 @@
-//! A tela X antes de abrir. Os quatro lançadores forçam `SDL_VIDEO_DRIVER=x11`, e sem X o jogo
-//! morre no boot com um stack trace ("x11 not available"); isto avisa antes, numa linha.
+//! A tela X antes de abrir. Todo jogo roda no X11 (`SDL_VIDEO_DRIVER=x11`, regra do README), e sem
+//! X ele morre no boot com um stack trace ("x11 not available"); isto avisa antes, numa linha.
 
 use std::env;
 use std::os::linux::net::SocketAddrExt;

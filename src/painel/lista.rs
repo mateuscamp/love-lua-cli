@@ -10,17 +10,21 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::formato;
 use super::tema::{self, apagado, atalho};
-use crate::jogos::{JOGOS, Jogo};
+use crate::jogos::{Jogo, LANCADOR};
 use crate::obra::Repo;
 
 /// A largura dos rótulos dos detalhes (`lançador  `).
 const ROTULO: usize = 10;
+/// O nome mais curto que a coluna dos jogos considera, para o título dela caber.
+const LARGURA_MINIMA: usize = 4;
 
-/// O que se sabe da pasta de um jogo.
+/// O que se sabe de um jogo descoberto.
 pub struct Situacao {
-    pub existe: bool,
+    pub jogo: Jogo,
     /// `None` com a pasta sem git, ou com o git que não respondeu.
     pub repo: Option<Repo>,
+    /// A cópia do lançador comum difere da dos outros jogos (`lancador_comum`).
+    pub destoa: bool,
 }
 
 /// A frase da última tentativa: o jogo que fechou, o que não abriu.
@@ -33,7 +37,7 @@ pub struct Recado {
 pub struct VistaLista<'a> {
     /// A raiz como o autor a escreve (`~/lua`).
     pub raiz: &'a str,
-    /// Uma por jogo, na ordem de `JOGOS`.
+    /// Uma por jogo descoberto, em ordem; vazia quando a raiz não tem jogo.
     pub situacoes: &'a [Situacao],
     pub escolhido: usize,
     pub tela: &'a Result<(), String>,
@@ -54,7 +58,15 @@ pub fn desenha(frame: &mut Frame, vista: &VistaLista) {
     let [paineis, baixo] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(rodape.len() as u16)])
             .areas(dentro);
-    let largura = JOGOS.iter().map(|jogo| jogo.nome.len()).max().unwrap_or(0) as u16 + 8;
+    let largura = vista
+        .situacoes
+        .iter()
+        .map(|situacao| situacao.jogo.pasta.chars().count())
+        .max()
+        .unwrap_or(0)
+        // Na lista vazia, ou de nomes curtos, o título ` Jogos ` ainda cabe na moldura.
+        .max(LARGURA_MINIMA) as u16
+        + 8;
     let [esquerda, direita] =
         Layout::horizontal([Constraint::Length(largura), Constraint::Min(10)]).areas(paineis);
     desenha_jogos(frame, esquerda, vista);
@@ -105,16 +117,16 @@ fn em_obra(situacao: &Situacao) -> bool {
 
 /// A lista dos jogos, com a barra em degradê na linha do escolhido.
 fn desenha_jogos(frame: &mut Frame, area: Rect, vista: &VistaLista) {
-    let itens: Vec<ListItem> = JOGOS
+    let itens: Vec<ListItem> = vista
+        .situacoes
         .iter()
-        .zip(vista.situacoes)
-        .map(|(jogo, situacao)| {
-            let mut partes = vec![Span::raw(jogo.nome)];
+        .map(|situacao| {
+            let mut partes = vec![Span::raw(situacao.jogo.pasta.clone())];
             if em_obra(situacao) {
                 partes.push(" ●".fg(tema::ORQUIDEA));
             }
-            if !situacao.existe {
-                partes.push(" ✗".fg(tema::CORAL));
+            if situacao.destoa {
+                partes.push(" ≠".fg(tema::CORAL));
             }
             ListItem::new(Line::from(partes))
         })
@@ -136,19 +148,37 @@ fn desenha_jogos(frame: &mut Frame, area: Rect, vista: &VistaLista) {
 }
 
 fn desenha_detalhes(frame: &mut Frame, area: Rect, vista: &VistaLista) {
-    let jogo = &JOGOS[vista.escolhido];
-    let situacao = &vista.situacoes[vista.escolhido];
-    let mut linhas = vec![
-        rotulado("pasta", pasta(vista.raiz, jogo, situacao)),
-        rotulado("lançador", vec![Span::raw(jogo.lancador.join(" "))]),
-    ];
-    if situacao.existe {
-        linhas.extend(git(situacao.repo.as_ref(), vista.agora));
+    let Some(situacao) = vista.situacoes.get(vista.escolhido) else {
+        desenha_vazio(frame, area, vista.raiz);
+        return;
+    };
+    let jogo = &situacao.jogo;
+    let mut lancador = vec![Span::raw(LANCADOR.join(" "))];
+    if situacao.destoa {
+        lancador.push(" ≠ difere dos outros jogos".fg(tema::CORAL));
     }
-    let titulo = Span::raw(format!(" {} ", jogo.nome))
+    let mut linhas = vec![
+        rotulado("pasta", pasta(vista.raiz, jogo)),
+        rotulado("lançador", lancador),
+    ];
+    linhas.extend(git(situacao.repo.as_ref(), vista.agora));
+    let titulo = Span::raw(format!(" {} ", jogo.pasta))
         .fg(tema::MAGENTA)
         .bold();
     let bloco = tema::bloco_de_dentro(titulo);
+    frame.render_widget(Paragraph::new(linhas).block(bloco), area);
+}
+
+/// Sem jogo na raiz: onde se procurou e o que faz uma pasta virar jogo.
+fn desenha_vazio(frame: &mut Frame, area: Rect, raiz: &str) {
+    let linhas = vec![
+        Line::from(format!(" nenhum jogo em {raiz}")),
+        Line::from(apagado(format!(
+            " um jogo é uma pasta com {} executável",
+            LANCADOR[0]
+        ))),
+    ];
+    let bloco = tema::bloco_de_dentro(" jogar ".fg(tema::MAGENTA).bold());
     frame.render_widget(Paragraph::new(linhas).block(bloco), area);
 }
 
@@ -158,13 +188,8 @@ fn rotulado(rotulo: &str, valor: Vec<Span<'static>>) -> Line<'static> {
     Line::from(partes)
 }
 
-fn pasta(raiz: &str, jogo: &Jogo, situacao: &Situacao) -> Vec<Span<'static>> {
-    let caminho = Span::raw(format!("{raiz}/{}", jogo.pasta));
-    if situacao.existe {
-        vec![caminho]
-    } else {
-        vec![caminho, " (não existe)".fg(tema::CORAL)]
-    }
+fn pasta(raiz: &str, jogo: &Jogo) -> Vec<Span<'static>> {
+    vec![Span::raw(format!("{raiz}/{}", jogo.pasta))]
 }
 
 /// Branch, mudanças e último commit; o ramo principal em ciano, a obra em orquídea.
@@ -233,18 +258,24 @@ mod testes {
             }),
             ..limpo.clone()
         };
+        let jogo = |pasta: &str| Jogo {
+            pasta: pasta.to_string(),
+        };
         vec![
             Situacao {
-                existe: true,
+                jogo: jogo("bomberboom"),
                 repo: Some(limpo),
+                destoa: false,
             },
             Situacao {
-                existe: true,
+                jogo: jogo("boomlitude"),
                 repo: Some(em_obra),
+                destoa: false,
             },
             Situacao {
-                existe: false,
+                jogo: jogo("campcrawler"),
                 repo: None,
+                destoa: true,
             },
         ]
     }
@@ -269,8 +300,8 @@ mod testes {
         for esperado in [
             "jogar",
             "tela X :0 ✓",
-            "▶ Boomlitude ●",
-            "BomberBoom ",
+            "▶ boomlitude ●",
+            "bomberboom ",
             "~/lua/boomlitude",
             "lançador  tools/love .",
             "r0-pendencias ● em obra",
@@ -281,7 +312,12 @@ mod testes {
         ] {
             assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
         }
-        assert!(!texto.contains("BomberBoom ●"), "{texto}");
+        assert!(!texto.contains("bomberboom ●"), "{texto}");
+        assert!(
+            texto.contains("campcrawler ≠"),
+            "o que destoa, na lista: {texto}"
+        );
+        assert!(!texto.contains("difere"), "o escolhido não destoa: {texto}");
     }
 
     #[test]
@@ -302,10 +338,10 @@ mod testes {
             "o título é etiqueta"
         );
         assert_eq!(cor("✓"), (tema::CIANO, tema::NOITE));
-        assert_eq!(cor("▶ Boomlitude"), (tema::MAGENTA, tema::BARRA.0));
+        assert_eq!(cor("▶ boomlitude"), (tema::MAGENTA, tema::BARRA.0));
         assert_eq!(cor("●").0, tema::ORQUIDEA, "a marca da obra na lista");
         assert_eq!(cor("● em obra").0, tema::ORQUIDEA);
-        assert_eq!(cor("✗").0, tema::CORAL);
+        assert_eq!(cor("≠").0, tema::CORAL, "o lançador que destoa");
         assert_eq!(cor("Enter").0, tema::MAGENTA, "a tecla da ajuda");
     }
 
@@ -317,12 +353,13 @@ mod testes {
         let mut ultima = vista(&situacoes, &tela);
         ultima.escolhido = 2;
         let pintada = tela_de_teste(80, 7, |frame| desenha(frame, &ultima));
-        let (x, y) = acha(&pintada, "▶ CampCrawler");
+        let (x, y) = acha(&pintada, "▶ campcrawler");
         assert_eq!(pintada[(x, y)].bg, tema::BARRA.0);
     }
 
+    /// O escolhido cujo lançador destoa diz isso nos detalhes, em coral.
     #[test]
-    fn lista_sem_tela_avisa_e_mostra_a_pasta_que_falta() {
+    fn lista_sem_tela_avisa_e_mostra_o_lancador_que_destoa() {
         let situacoes = situacoes();
         let tela = Err("sem tela X: ninguém atende no DISPLAY=\":77\"".to_string());
         let recado = Recado {
@@ -336,11 +373,28 @@ mod testes {
         for esperado in [
             "sem tela X",
             "ninguém atende no DISPLAY=\":77\"",
-            "~/lua/campcrawler (não existe)",
+            "lançador  tools/love . ≠ difere dos outros jogos",
+            "— sem git",
             "Boomlitude saiu com 1",
         ] {
             assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
         }
         assert!(!texto.contains("✓"), "{texto}");
+    }
+
+    /// Raiz sem jogo: os detalhes dizem onde se procurou e o que é um jogo.
+    #[test]
+    fn lista_vazia_diz_onde_procurou_e_o_que_e_um_jogo() {
+        let tela = Ok(());
+        let mut vazia = vista(&[], &tela);
+        vazia.escolhido = 0;
+        let texto = texto_da_tela(100, 12, |frame| desenha(frame, &vazia));
+        for esperado in [
+            "╭ Jogos ",
+            "nenhum jogo em ~/lua",
+            "um jogo é uma pasta com tools/love executável",
+        ] {
+            assert!(texto.contains(esperado), "falta {esperado:?} em\n{texto}");
+        }
     }
 }

@@ -1,77 +1,76 @@
-//! Os jogos de `~/lua` e o comando que abre cada um pelo lançador do próprio projeto.
+//! Os jogos da raiz (`~/lua`) e o comando que abre cada um pelo lançador comum.
 //!
-//! Este programa não sabe abrir o LÖVE. Cada jogo é dono do seu lançador (o que confere o runtime
-//! contra o `runtime.lock` e limpa o ambiente); aqui só se chama esse lançador de dentro da pasta
-//! do jogo, como o AGENTS.md de cada um manda. Se um projeto mudar o lançador, muda a linha dele
-//! em `JOGOS`.
+//! Este programa não sabe abrir o LÖVE. Todo jogo traz o mesmo lançador, `tools/love`, que confere
+//! o runtime contra o `runtime.lock` do projeto e limpa o ambiente; aqui só se chama esse lançador
+//! de dentro da pasta do jogo. Jogo é toda pasta da raiz com um `tools/love` executável (autor,
+//! 31/10): pôr um jogo é pôr a pasta, sem mexer aqui. A regra do lançador comum mora no README.
 
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 
+/// O lançador comum, relativo à pasta do jogo, e o argumento dele: a própria pasta. Desde 28/10 os
+/// jogos de `~/lua` abrem todos assim (o Boomlitude foi o último a trocar, Compositando/boomlitude#5).
+pub const LANCADOR: [&str; 2] = ["tools/love", "."];
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Jogo {
-    pub nome: &'static str,
-    /// A pasta dentro de `~/lua`; é também o nome que se digita em `jogar <jogo>`.
-    pub pasta: &'static str,
-    /// O lançador do projeto e os argumentos dele até a pasta do jogo. Programa com barra é
-    /// caminho dentro da pasta do jogo; sem barra, vem do PATH.
-    pub lancador: &'static [&'static str],
+    /// A pasta dentro da raiz: é o nome mostrado e o que se digita em `jogar <jogo>`. O prefixo
+    /// dos fatos que o jogo escreve é ela em maiúsculas.
+    pub pasta: String,
 }
 
-pub const JOGOS: &[Jogo] = &[
-    Jogo {
-        nome: "BomberBoom",
-        pasta: "bomberboom",
-        lancador: &["tools/love", "."],
-    },
-    Jogo {
-        nome: "Boomlitude",
-        pasta: "boomlitude",
-        lancador: &["tools/love", "."],
-    },
-    Jogo {
-        nome: "CampCrawler",
-        pasta: "campcrawler",
-        lancador: &["tools/love", "."],
-    },
-    Jogo {
-        nome: "Gods",
-        pasta: "gods",
-        lancador: &["tools/love", "."],
-    },
-];
+/// Os jogos de `raiz`, em ordem alfabética sem olhar a caixa: as pastas com `tools/love`
+/// executável. Raiz que não se lê dá a lista vazia, que o painel explica; pasta cujo nome não é
+/// UTF-8 fica de fora.
+pub fn descobre(raiz: &Path) -> Vec<Jogo> {
+    let Ok(entradas) = std::fs::read_dir(raiz) else {
+        return Vec::new();
+    };
+    let mut jogos: Vec<Jogo> = entradas
+        .filter_map(|entrada| entrada.ok()?.file_name().into_string().ok())
+        .filter(|pasta| tem_lancador(&raiz.join(pasta)))
+        .map(|pasta| Jogo { pasta })
+        .collect();
+    jogos.sort_by_key(|jogo| jogo.pasta.to_lowercase());
+    jogos
+}
 
-pub fn procura(nome: &str) -> Option<&'static Jogo> {
-    JOGOS
-        .iter()
+/// Se `pasta` tem o `tools/love` como arquivo executável por alguém (dono, grupo ou outros). O
+/// link simbólico vale pelo arquivo a que aponta.
+fn tem_lancador(pasta: &Path) -> bool {
+    std::fs::metadata(pasta.join(LANCADOR[0]))
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// O jogo de `raiz` cuja pasta é `nome`, sem olhar a caixa.
+pub fn procura(raiz: &Path, nome: &str) -> Option<Jogo> {
+    descobre(raiz)
+        .into_iter()
         .find(|jogo| jogo.pasta.eq_ignore_ascii_case(nome))
 }
 
-/// O comando que abre `jogo` a partir de `raiz`, com `extras` depois da pasta (é onde os quatro
-/// lançadores aceitam o `--config=`). O programa relativo vira absoluto: o `Command` não promete
-/// resolvê-lo a partir do `current_dir`.
+/// O comando que abre `jogo` a partir de `raiz`, com `extras` depois da pasta (é onde o lançador
+/// comum aceita o `--config=`). O programa vai absoluto: o `Command` não promete resolver o
+/// relativo a partir do `current_dir`.
 fn comando(raiz: &Path, jogo: &Jogo, extras: &[String]) -> Command {
-    let pasta = raiz.join(jogo.pasta);
-    let (programa, argumentos) = jogo.lancador.split_first().expect("lançador sem programa");
-    let programa = if programa.contains('/') {
-        pasta.join(programa)
-    } else {
-        PathBuf::from(programa)
-    };
-    let mut comando = Command::new(programa);
-    comando.args(argumentos).args(extras).current_dir(pasta);
+    let pasta = raiz.join(&jogo.pasta);
+    let [programa, argumento] = LANCADOR;
+    let mut comando = Command::new(pasta.join(programa));
+    comando.arg(argumento).args(extras).current_dir(pasta);
     comando
 }
 
-/// A pasta do jogo, ou o erro de uma linha quando ela não existe.
+/// A pasta do jogo, ou o erro de uma linha quando ela sumiu depois da descoberta.
 fn pasta_do(raiz: &Path, jogo: &Jogo) -> Result<PathBuf, String> {
-    let pasta = raiz.join(jogo.pasta);
+    let pasta = raiz.join(&jogo.pasta);
     if pasta.is_dir() {
         Ok(pasta)
     } else {
         Err(format!(
             "{}: a pasta {} não existe",
-            jogo.nome,
+            jogo.pasta,
             pasta.display()
         ))
     }
@@ -79,8 +78,9 @@ fn pasta_do(raiz: &Path, jogo: &Jogo) -> Result<PathBuf, String> {
 
 fn nao_abriu(jogo: &Jogo, erro: std::io::Error) -> String {
     format!(
-        "{}: o lançador {:?} não abriu: {erro}",
-        jogo.nome, jogo.lancador
+        "{}: o lançador {} não abriu: {erro}",
+        jogo.pasta,
+        LANCADOR.join(" ")
     )
 }
 
@@ -123,64 +123,61 @@ mod testes {
     use crate::apoio_de_teste::{jogo_falso, pasta_de_teste};
     use std::io::{BufRead, BufReader};
 
+    /// As pastas dos `jogos`, na ordem, para comparar de uma vez.
+    fn pastas(jogos: &[Jogo]) -> Vec<&str> {
+        jogos.iter().map(|jogo| jogo.pasta.as_str()).collect()
+    }
+
+    /// Jogo é a pasta com `tools/love` executável (autor, 31/10). Fica de fora a pasta sem ele, a
+    /// com ele sem o bit de execução, a com `tools/love` que é pasta, e o arquivo solto na raiz. A
+    /// ordem não olha a caixa: pela tabela ASCII, o `Zumbi` viria antes.
+    #[test]
+    fn descobre_as_pastas_com_tools_love_executavel_em_ordem() {
+        let raiz = pasta_de_teste("descobre");
+        for pasta in ["gods", "Zumbi", "campcrawler"] {
+            jogo_falso(&raiz, pasta, "exit 0\n");
+        }
+        std::fs::create_dir_all(raiz.join("anticolonia/assets")).unwrap();
+        std::fs::create_dir_all(raiz.join("pasta-love/tools/love")).unwrap();
+        std::fs::create_dir_all(raiz.join("sem-bit/tools")).unwrap();
+        std::fs::write(raiz.join("sem-bit/tools/love"), "#!/bin/sh\n").unwrap();
+        std::fs::write(raiz.join("solto.txt"), "não é jogo").unwrap();
+        let jogos = descobre(&raiz);
+        assert_eq!(pastas(&jogos), ["campcrawler", "gods", "Zumbi"]);
+        std::fs::remove_dir_all(&raiz).unwrap();
+    }
+
+    #[test]
+    fn raiz_que_nao_existe_nao_tem_jogos() {
+        let casa = pasta_de_teste("sem-raiz");
+        assert_eq!(descobre(&casa.join("lua")), []);
+        std::fs::remove_dir_all(&casa).unwrap();
+    }
+
     #[test]
     fn procura_pela_pasta_sem_olhar_a_caixa() {
-        assert_eq!(procura("CampCrawler").map(|j| j.nome), Some("CampCrawler"));
-        assert_eq!(procura("boomlitude").map(|j| j.nome), Some("Boomlitude"));
-        assert!(procura("camcrawler").is_none());
+        let raiz = pasta_de_teste("procura");
+        jogo_falso(&raiz, "campcrawler", "exit 0\n");
+        let achado = procura(&raiz, "CampCrawler").map(|jogo| jogo.pasta);
+        assert_eq!(achado.as_deref(), Some("campcrawler"));
+        assert_eq!(procura(&raiz, "camcrawler"), None);
+        std::fs::remove_dir_all(&raiz).unwrap();
     }
 
-    /// O Gods entrou em 31/10, a pedido do autor, ainda na F1 da reescrita: até a F3, segundo a
-    /// orquestradora dele, `tools/love .` abre só a vista mínima (o retângulo magenta provisório).
-    /// A pasta vai escrita por extenso: o `procura` ignora a caixa, mas o disco não (`~/lua/Gods`
-    /// não existe), e nada mais na suíte a prendia.
+    /// Todo jogo abre pelo lançador comum, absoluto, de dentro da pasta, com os extras depois dela.
     #[test]
-    fn a_lista_tem_os_quatro_jogos_em_ordem() {
-        let nomes: Vec<&str> = JOGOS.iter().map(|jogo| jogo.nome).collect();
-        assert_eq!(nomes, ["BomberBoom", "Boomlitude", "CampCrawler", "Gods"]);
-        let pastas_da_lista: Vec<&str> = JOGOS.iter().map(|jogo| jogo.pasta).collect();
-        assert_eq!(
-            pastas_da_lista,
-            ["bomberboom", "boomlitude", "campcrawler", "gods"]
-        );
-        assert_eq!(procura("gods").map(|j| j.nome), Some("Gods"));
-    }
-
-    #[test]
-    fn lancador_com_barra_vira_caminho_absoluto_na_pasta_do_jogo() {
+    fn o_lancador_comum_roda_na_pasta_do_jogo_com_os_extras_depois() {
         let extras = ["--config=bomberboom.seed=3".to_string()];
-        let c = comando(Path::new("/r"), procura("bomberboom").unwrap(), &extras);
+        let jogo = Jogo {
+            pasta: "bomberboom".to_string(),
+        };
+        let c = comando(Path::new("/r"), &jogo, &extras);
         assert_eq!(c.get_program(), "/r/bomberboom/tools/love");
         assert_eq!(
             c.get_args().collect::<Vec<_>>(),
             [".", "--config=bomberboom.seed=3"]
         );
         assert_eq!(c.get_current_dir(), Some(Path::new("/r/bomberboom")));
-    }
-
-    /// O lançador comum, `tools/love`, chegou ao Boomlitude em 28/10 (Compositando/boomlitude#5),
-    /// no lugar do `luajit ferramentas/love/lanca.lua`, que saiu do `main` dele.
-    #[test]
-    fn todos_os_jogos_abrem_pelo_tools_love_da_pasta() {
-        for jogo in JOGOS {
-            let c = comando(Path::new("/r"), jogo, &[]);
-            let pasta = Path::new("/r").join(jogo.pasta);
-            assert_eq!(c.get_program(), pasta.join("tools/love"), "{}", jogo.nome);
-            assert_eq!(c.get_args().collect::<Vec<_>>(), ["."], "{}", jogo.nome);
-        }
-    }
-
-    #[test]
-    fn lancador_sem_barra_vem_do_path_e_roda_na_pasta_do_jogo() {
-        let jogo = Jogo {
-            nome: "Teste",
-            pasta: "teste",
-            lancador: &["luajit", "lanca.lua", "."],
-        };
-        let c = comando(Path::new("/r"), &jogo, &[]);
-        assert_eq!(c.get_program(), "luajit");
-        assert_eq!(c.get_args().collect::<Vec<_>>(), ["lanca.lua", "."]);
-        assert_eq!(c.get_current_dir(), Some(Path::new("/r/teste")));
     }
 
     /// Um BomberBoom de mentira: o `tools/love` dele escreve um fato no stdout (com a pasta, o
@@ -199,7 +196,10 @@ mod testes {
     fn sobe_roda_o_lancador_na_pasta_num_grupo_proprio_com_a_saida_num_cano() {
         let raiz = pasta_de_teste("sobe");
         bomberboom_falso(&raiz);
-        let mut filho = sobe(&raiz, procura("bomberboom").unwrap()).unwrap();
+        let jogo = Jogo {
+            pasta: "bomberboom".to_string(),
+        };
+        let mut filho = sobe(&raiz, &jogo).unwrap();
         let saida = BufReader::new(filho.stdout.take().unwrap());
         let erro = BufReader::new(filho.stderr.take().unwrap());
         let linhas: Vec<String> = saida.lines().map(Result::unwrap).collect();
@@ -215,10 +215,14 @@ mod testes {
         std::fs::remove_dir_all(&raiz).unwrap();
     }
 
+    /// A pasta que some entre a descoberta e o Enter.
     #[test]
     fn sobe_sem_a_pasta_do_jogo_diz_qual() {
         let raiz = pasta_de_teste("sobe-sem-pasta");
-        let erro = sobe(&raiz, procura("campcrawler").unwrap()).unwrap_err();
+        let jogo = Jogo {
+            pasta: "campcrawler".to_string(),
+        };
+        let erro = sobe(&raiz, &jogo).unwrap_err();
         assert!(erro.contains("campcrawler não existe"), "{erro}");
         std::fs::remove_dir_all(&raiz).unwrap();
     }

@@ -1,50 +1,59 @@
-//! `jogar`: escolhe um dos jogos LÖVE de `~/lua` e abre pelo lançador do próprio projeto.
+//! `jogar`: escolhe um dos jogos LÖVE da raiz (`~/lua`) e abre pelo lançador comum, `tools/love`.
 //!
 //! Sem argumento, o painel em tela cheia (`painel`); com o nome de um jogo, abre direto, com o
-//! terminal do jogo. Os módulos: `jogos` (a tabela e o comando que abre), `tela` (o X antes de
-//! abrir), `obra` (o git da pasta de cada jogo), `fatos` (o que o jogo escreve enquanto roda) e
-//! `painel` (o único que fala com o terminal).
+//! terminal do jogo. Os módulos: `jogos` (a descoberta e o comando que abre), `lancador_comum` (a
+//! cópia do lançador em cada jogo), `tela` (o X antes de abrir), `obra` (o git da pasta de cada
+//! jogo), `fatos` (o que o jogo escreve enquanto roda) e `painel` (o único que fala com o terminal).
 
 #[cfg(test)]
 mod apoio_de_teste;
 mod fatos;
 mod jogos;
+mod lancador_comum;
 mod obra;
 mod painel;
 mod tela;
 
 use std::env;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use jogos::JOGOS;
-
-fn ajuda() -> String {
-    let pastas: Vec<&str> = JOGOS.iter().map(|jogo| jogo.pasta).collect();
+fn ajuda(raiz: &Path) -> String {
+    let encontrados: Vec<String> = jogos::descobre(raiz)
+        .into_iter()
+        .map(|jogo| jogo.pasta)
+        .collect();
+    let lista = if encontrados.is_empty() {
+        "nenhum (um jogo é uma pasta com tools/love executável)".to_string()
+    } else {
+        encontrados.join(", ")
+    };
     format!(
-        "jogar: abre um dos jogos LÖVE de ~/lua pelo lançador do próprio projeto.\n\
+        "jogar: abre um dos jogos LÖVE de {} pelo lançador comum, tools/love.\n\
          \n\
          \x20 jogar                    painel: setas escolhem, Enter abre, Esc ou q sai;\n\
          \x20                          com o jogo aberto, o que ele faz ao vivo, e x encerra\n\
          \x20 jogar <jogo> [args...]   abre direto; os args vão ao lançador depois da pasta,\n\
          \x20                          ex.: jogar campcrawler --config=campcrawler.lang=pt_BR\n\
          \n\
-         jogos: {}\n",
-        pastas.join(", ")
+         A raiz é $JOGAR_RAIZ, ou ~/lua.\n\
+         jogos: {lista}\n",
+        raiz.display()
     )
 }
 
 /// `jogar <jogo> [args...]`: confere a tela, abre com o terminal do jogo e sai com o código dele.
-fn direto(raiz: &std::path::Path, nome: &str, extras: &[String]) -> ExitCode {
-    let Some(jogo) = jogos::procura(nome) else {
-        eprint!("jogar: não conheço o jogo {nome:?}\n\n{}", ajuda());
+fn direto(raiz: &Path, nome: &str, extras: &[String]) -> ExitCode {
+    let Some(jogo) = jogos::procura(raiz, nome) else {
+        eprint!("jogar: não conheço o jogo {nome:?}\n\n{}", ajuda(raiz));
         return ExitCode::from(2);
     };
     if let Err(aviso) = tela::tela() {
-        eprintln!("jogar: {} não abre: {aviso}", jogo.nome);
+        eprintln!("jogar: {} não abre: {aviso}", jogo.pasta);
         return ExitCode::from(2);
     }
-    match jogos::abre(raiz, jogo, extras) {
+    match jogos::abre(raiz, &jogo, extras) {
         Ok(codigo) => ExitCode::from(codigo),
         Err(erro) => {
             eprintln!("jogar: {erro}");
@@ -53,17 +62,29 @@ fn direto(raiz: &std::path::Path, nome: &str, extras: &[String]) -> ExitCode {
     }
 }
 
+/// A raiz dos jogos: `escolhida` (o `$JOGAR_RAIZ`) quando não vazia, senão `casa/lua`. Sem as
+/// duas, o erro de uma linha.
+fn raiz_dos_jogos(casa: Option<OsString>, escolhida: Option<OsString>) -> Result<PathBuf, String> {
+    if let Some(escolhida) = escolhida.filter(|escolhida| !escolhida.is_empty()) {
+        return Ok(PathBuf::from(escolhida));
+    }
+    casa.map(|casa| PathBuf::from(casa).join("lua"))
+        .ok_or_else(|| "$HOME não está definido, e nem $JOGAR_RAIZ".to_string())
+}
+
 fn main() -> ExitCode {
-    let Some(casa) = env::var_os("HOME") else {
-        eprintln!("jogar: $HOME não está definido");
-        return ExitCode::from(2);
+    let raiz = match raiz_dos_jogos(env::var_os("HOME"), env::var_os("JOGAR_RAIZ")) {
+        Ok(raiz) => raiz,
+        Err(erro) => {
+            eprintln!("jogar: {erro}");
+            return ExitCode::from(2);
+        }
     };
-    let raiz = PathBuf::from(casa).join("lua");
     let argumentos: Vec<String> = env::args().skip(1).collect();
     match argumentos.split_first() {
         None => painel::menu(&raiz),
         Some((nome, _)) if nome == "-h" || nome == "--help" => {
-            print!("{}", ajuda());
+            print!("{}", ajuda(&raiz));
             ExitCode::SUCCESS
         }
         Some((nome, extras)) => direto(&raiz, nome, extras),
@@ -72,6 +93,30 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod testes {
+    use super::*;
+
+    /// O `$JOGAR_RAIZ` põe a raiz em outro lugar (para quem não guarda os jogos em `~/lua`); vazio,
+    /// vale o `~/lua`.
+    #[test]
+    fn a_raiz_vem_do_jogar_raiz_ou_do_lua_da_casa() {
+        let casa = Some(OsString::from("/c"));
+        let escolhida = Some(OsString::from("/jogos"));
+        assert_eq!(
+            raiz_dos_jogos(casa.clone(), None),
+            Ok(PathBuf::from("/c/lua"))
+        );
+        assert_eq!(
+            raiz_dos_jogos(casa.clone(), escolhida.clone()),
+            Ok(PathBuf::from("/jogos"))
+        );
+        assert_eq!(raiz_dos_jogos(None, escolhida), Ok(PathBuf::from("/jogos")));
+        assert_eq!(
+            raiz_dos_jogos(casa, Some(OsString::new())),
+            Ok(PathBuf::from("/c/lua"))
+        );
+        assert!(raiz_dos_jogos(None, None).is_err());
+    }
+
     /// Auditoria de 28/10, achado A3: o AGENTS.md dizia Rust 1.85+, e o ratatui 0.30 pede 1.88. A
     /// versão mínima mora no `rust-version` do Cargo.toml, que o cargo cobra, e o AGENTS.md diz a
     /// mesma.

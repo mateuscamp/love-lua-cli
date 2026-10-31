@@ -23,7 +23,7 @@ type Chegada = (Origem, String, Instant);
 
 /// O jogo rodando, com o placar do que ele escreve.
 pub(super) struct Partida {
-    jogo: &'static Jogo,
+    jogo: Jogo,
     filho: Child,
     chegadas: Receiver<Chegada>,
     inicio: Instant,
@@ -34,7 +34,7 @@ pub(super) struct Partida {
 }
 
 impl Partida {
-    pub(super) fn sobe(raiz: &Path, jogo: &'static Jogo) -> Result<Partida, String> {
+    pub(super) fn sobe(raiz: &Path, jogo: &Jogo) -> Result<Partida, String> {
         let mut filho = jogos::sobe(raiz, jogo)?;
         let (envia, chegadas) = mpsc::channel();
         let saida = filho
@@ -49,11 +49,11 @@ impl Partida {
         escuta(erro, Origem::Erro, envia);
         sinais::anota_grupo_do_jogo(filho.id() as i32);
         Ok(Partida {
-            jogo,
+            jogo: jogo.clone(),
             filho,
             chegadas,
             inicio: Instant::now(),
-            placar: Placar::novo(jogo.nome),
+            placar: Placar::novo(&jogo.pasta),
             rolagem: 0,
             encerrado: false,
         })
@@ -80,7 +80,7 @@ impl Partida {
             encerrado: self.encerrado,
             decorrido: self.inicio.elapsed(),
         };
-        Some(recado_do_fim(self.jogo.nome, &fim, &self.placar))
+        Some(recado_do_fim(&self.jogo.pasta, &fim, &self.placar))
     }
 
     pub(super) fn rola(&mut self, passo: isize) {
@@ -112,7 +112,7 @@ impl Partida {
 
     pub(super) fn vista(&self) -> VistaPartida<'_> {
         VistaPartida {
-            nome: self.jogo.nome,
+            nome: &self.jogo.pasta,
             placar: &self.placar,
             agora: self.inicio.elapsed(),
             rolagem: self.rolagem,
@@ -196,7 +196,7 @@ mod testes {
     use crate::apoio_de_teste::{
         LANCADOR_COM_NETO, espera_pid, jogo_falso, morre_em, pasta_de_teste,
     };
-    use crate::jogos::procura;
+    use crate::jogos::Jogo;
 
     /// Auditoria de 28/10, achado A1: o jogo sobe num grupo próprio, então, se o jogar sai sem
     /// fechá-lo (sinal, pânico), ninguém mais o fecha.
@@ -204,7 +204,10 @@ mod testes {
     fn partida_solta_com_o_jogo_aberto_fecha_o_jogo_inteiro() {
         let raiz = pasta_de_teste("partida-solta");
         jogo_falso(&raiz, "bomberboom", LANCADOR_COM_NETO);
-        let partida = Partida::sobe(&raiz, procura("bomberboom").unwrap()).unwrap();
+        let jogo = Jogo {
+            pasta: "bomberboom".to_string(),
+        };
+        let partida = Partida::sobe(&raiz, &jogo).unwrap();
         let neto = espera_pid(&raiz.join("bomberboom/neto"), Duration::from_secs(3));
 
         drop(partida);

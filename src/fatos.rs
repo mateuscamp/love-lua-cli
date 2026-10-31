@@ -1,7 +1,7 @@
 //! O que o jogo escreve enquanto roda, para o painel mostrar.
 //!
-//! Os quatro jogos escrevem fatos de uma linha, `<JOGO> <TIPO> chave=valor ...` (o JOGO é o nome em
-//! maiúsculas), com o stdout em modo de linha (`io.stdout:setvbuf("line")` no topo do `conf.lua` de
+//! Os jogos escrevem fatos de uma linha, `<JOGO> <TIPO> chave=valor ...` (o JOGO é a pasta em
+//! maiúsculas; regra do README), com o stdout em modo de linha (`io.stdout:setvbuf("line")` no topo do `conf.lua` de
 //! cada um), então cada fato chega ao vivo pelo cano. O formato é dos jogos; aqui só se lê. O que
 //! não é fato (um traceback, um aviso do LÖVE) vira o tipo `texto` ou, do stderr, `erro`.
 
@@ -128,7 +128,7 @@ impl Placar {
         self.por_segundo[segundo] += 1;
     }
 
-    /// O `CONFIG` dos quatro jogos diz `chave=`, `valor=` e `origem=`; fica o último de cada chave.
+    /// O `CONFIG` dos jogos diz `chave=`, `valor=` e `origem=`; fica o último de cada chave.
     fn anota_config(&mut self, campos: &[(String, String)]) {
         let campo = |nome: &str| {
             campos

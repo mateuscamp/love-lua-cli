@@ -34,6 +34,8 @@ fn abre_pelo_painel(casa: &Path) -> Painel {
     let mut terminal = Command::new("script")
         .args(["-qfec", env!("CARGO_BIN_EXE_jogar"), "/dev/null"])
         .env("HOME", casa)
+        // O `$JOGAR_RAIZ` de quem roda a suíte levaria o painel para fora da casa de mentira.
+        .env_remove("JOGAR_RAIZ")
         // Display remoto: o jogar não confere, e o jogo de mentira não precisa de X.
         .env("DISPLAY", "localhost:10.0")
         .env("TERM", "xterm-256color")

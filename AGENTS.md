@@ -1,6 +1,6 @@
 # jogar
 
-CLI do autor: abre os jogos LÖVE de `~/lua` pelo lançador de cada projeto. Uso: `README.md`.
+CLI do autor: abre os jogos LÖVE de `~/lua` pelo lançador comum, `tools/love`. Uso: `README.md`.
 Regra nova entra aqui com `(autor, dd/mm)`; o porquê, no commit. Sem `CLAUDE.md` aqui (o Claude Code
 ignoraria este arquivo).
 
@@ -21,8 +21,11 @@ ignoraria este arquivo).
 
 ## Limites
 
-- Não abrir o LÖVE nem decidir regra de jogo: chamar o lançador que o `AGENTS.md` do jogo manda
-  (tabela `JOGOS`). Não é o hub descartado em 23/10. Mora aqui, não no `~/love-lua` (ADR 0003).
+- Não abrir o LÖVE nem decidir regra de jogo: chamar `tools/love .` da pasta do jogo. Não é o hub
+  descartado em 23/10. Mora aqui, não no `~/love-lua` (ADR 0003).
+- Jogo é pasta da raiz (`$JOGAR_RAIZ` ou `~/lua`) com `tools/love` executável; nome é a pasta. As
+  regras de um jogo (lançador igual em todos, X11, fatos) moram no README, "Adding a game"; mudou
+  uma, muda lá (autor, 31/10).
 - `~/lua/<jogo>`: só leitura, `git --no-optional-locks`. Nunca checkout, stash, pull ou escrita.
 - Jogo só sob `xvfb-run -a` (display ≥ `:99`), som nulo, XDG em pasta temporária. Nunca
   `Xvfb -displayfd`: toma o `:0` e apaga o `X0` do autor (28/10). Tela do autor só com pergunta.
@@ -30,15 +33,19 @@ ignoraria este arquivo).
   sessão).
 - Produto (autor, 28/10): painel em tela cheia; estado ao vivo durante o jogo; obra se mostra, não
   se impede; aviso do X0 com o `ln`. Cores anil e magenta, em 24 bits (autor, 30/10).
+- Portfólio (autor, 31/10): repositório público, GPL-3.0; README em inglês com resumo em português.
+  Código e comentários seguem em português até a rodada própria de tradução. `≠` marca o lançador
+  que destoa da maioria; só avisa.
 
 ## Mapa
 
-- `main.rs`: argumentos; painel ou `jogar <jogo>` direto.
-- `jogos.rs`: `JOGOS`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
+- `main.rs`: argumentos e raiz; painel ou `jogar <jogo>` direto.
+- `jogos.rs`: `descobre`, `procura`; `abre` (direto); `sobe` (cano, stdin nulo, grupo próprio).
+- `lancador_comum.rs`: a cópia do lançador em cada jogo e quais destoam.
 - `tela.rs`: X antes de abrir. `obra.rs`: git das pastas. `fatos.rs`: linhas do jogo, `Placar`.
 - `painel/`: `mod.rs` laço e lista (único com terminal); `processo.rs` jogo rodando (único com
   processo); `sinais.rs`; `lista.rs`, `partida.rs` só desenham; `tema.rs` cores e degradê;
-  `teclas.rs`, `formato.rs` puros.
+  `teclas.rs`, `formato.rs` puros; `apoio_de_tela.rs` só nos testes.
 - `apoio_de_teste.rs`: ajudantes; `tests/` o inclui por `#[path]`.
 
 ## Código (Clean Code para agente, Akita)
@@ -57,7 +64,8 @@ ignoraria este arquivo).
 ## Defesa (manter)
 
 - Sem X: avisar e não abrir. `X<n>` sumido e `X<n>_` vivo: o aviso traz o `ln`.
-- Pasta ou lançador ausente; jogo que morre: uma linha com código e 1ª linha do stderr.
+- Pasta que some depois da descoberta; jogo que morre: uma linha com código e 1ª linha do stderr.
+- Raiz sem jogo: o painel diz onde procurou e o que é um jogo; as teclas não quebram.
 - Git falha: sem marca. Sem tty: sair 2.
 - `x`: SIGTERM no grupo. Ctrl+C: SIGTERM, 2 s, SIGKILL, sair 130. Pânico: o `Drop` da `Partida`.
 - SIGHUP/SIGTERM no jogar: o tratador manda SIGTERM ao grupo do jogo. SIGHUP sai ali (`_exit`): no

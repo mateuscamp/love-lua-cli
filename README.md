@@ -1,29 +1,37 @@
 # jogar
 
-Abre um dos jogos LÖVE de `~/lua` pelo terminal, sem entrar na pasta.
+> **Em português.** `jogar` é um painel de terminal que abre os jogos LÖVE da pasta `~/lua` e
+> mostra, ao vivo, o que cada jogo está fazendo. Jogo é toda pasta com um `tools/love` executável:
+> para pôr um jogo, basta a pasta. Todo jogo usa o **mesmo lançador**, copiado igual de um projeto
+> para outro; o painel marca com `≠` o jogo cujo lançador difere dos outros. As regras completas
+> estão em [Adding a game](#adding-a-game). Licença GPL-3.0.
+
+A terminal panel for a folder of [LÖVE](https://love2d.org) games. It lists the games, shows the
+git state of each one, opens the chosen game through its own launcher and, while the game runs in
+its window, shows live what the game reports about itself.
 
 ```bash
-jogar                                              # painel: setas escolhem, Enter abre, Esc ou q sai
-jogar campcrawler                                  # abre direto, com o terminal do jogo
-jogar campcrawler --config=campcrawler.lang=pt_BR  # o resto vai ao lançador, depois da pasta
+jogar                                              # panel: arrows choose, Enter opens, Esc or q quits
+jogar campcrawler                                  # opens directly, with the game's own terminal
+jogar campcrawler --config=campcrawler.lang=pt_BR  # the rest goes to the launcher, after the folder
 ```
 
-Não abre o LÖVE por conta própria: chama o lançador de cada projeto, de dentro da pasta dele, e
-é esse lançador que confere o runtime contra o `runtime.lock`. Precisa do `$LOVE_RUNTIME`, como
-os jogos.
+`jogar` never starts LÖVE by itself: it runs the game's launcher, `tools/love`, from inside the
+game's folder, and the launcher checks the LÖVE runtime against the game's `runtime.lock`.
 
-## O painel
+## The panel
 
-Sem argumento, o `jogar` ocupa o terminal: a lista dos jogos à esquerda e, à direita, a pasta, o
-lançador, a branch, as mudanças sem commit e o último commit do escolhido.
+With no argument, `jogar` takes the whole terminal: the games on the left and, on the right, the
+chosen game's folder, launcher, branch, uncommitted changes and last commit. The interface is in
+Portuguese.
 
 ```text
 ╭ jogar ────────────────────────────────────────────────────────── tela X :0 ✓ ╮
-│╭ Jogos ──────────╮╭ Boomlitude ─────────────────────────────────────────────╮│
-││  BomberBoom     ││ pasta     ~/lua/boomlitude                              ││
-││▶ Boomlitude ●   ││ lançador  tools/love .                                  ││
-││  CampCrawler    ││ branch    r0-pendencias ● em obra                       ││
-││  Gods           ││ mudanças  5 mudanças sem commit                         ││
+│╭ Jogos ──────────╮╭ boomlitude ─────────────────────────────────────────────╮│
+││  bomberboom ≠   ││ pasta     ~/lua/boomlitude                              ││
+││▶ boomlitude ●   ││ lançador  tools/love .                                  ││
+││  campcrawler    ││ branch    r0-pendencias ● em obra                       ││
+││  gods           ││ mudanças  5 mudanças sem commit                         ││
 ││                 ││ último    48f0ad1 · há 12m                              ││
 ││                 ││           O mostrado acompanha as passagens (A8)        ││
 │╰─────────────────╯╰─────────────────────────────────────────────────────────╯│
@@ -31,23 +39,25 @@ lançador, a branch, as mudanças sem commit e o último commit do escolhido.
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-As cores são anil e magenta: o fundo anil-noite, a moldura em degradê do anil ao magenta, o nome
-em etiqueta magenta, a obra em orquídea, o que está certo em ciano e o que deu errado em coral.
-Pede terminal com cor de 24 bits (kitty, foot, ghostty, wezterm); no tmux sem `RGB` nas
-`terminal-features`, as cores saem aproximadas.
+- `●` marks a game whose folder is off its main branch (`origin/HEAD`, or `main`) or has
+  uncommitted changes. The launcher opens the game as it is in the folder, so that work in
+  progress is what opens. The mark only informs: Enter opens it all the same.
+- `≠` marks a game whose copy of the shared launcher differs from the other games' copies (see
+  [Adding a game](#adding-a-game)). It also only informs.
 
-O lançador abre o jogo como ele está na pasta. Quando alguém está trabalhando nela, é essa obra
-que abre, não o ramo principal (o do `origin/HEAD`, ou `main`). Por isso o `●` marca o jogo cuja
-pasta está fora do principal ou tem mudanças sem commit. A marca só informa: o Enter abre igual.
+The colors are indigo and magenta: an indigo-night background, a frame fading from indigo to
+magenta, the name as a magenta tag, work in progress in orchid, what is fine in cyan and what went
+wrong in coral. It needs a 24-bit color terminal (kitty, foot, ghostty, wezterm); in tmux without
+`RGB` in `terminal-features`, the colors are approximated.
 
-Enquanto o jogo roda na janela dele, o painel mostra o que ele está fazendo: uma linha por tipo
-de fato que o jogo escreve (`CAMPCRAWLER MAPA numero=1 linhas=9`), atualizada no lugar, com
-quantas vezes veio, há quanto tempo e o último valor. A linha que acabou de mudar sai com `▸`; o
-`CONFIG` mostra só o que saiu do padrão; a primeira linha do stderr fica embaixo, em coral. O
-`x` encerra o jogo; quando a janela fecha, a lista volta com um recado do que aconteceu.
+While the game runs in its window, the panel shows one line per kind of fact the game writes
+(`CAMPCRAWLER MAPA numero=1 linhas=9`), updated in place, with how many times it came, how long
+ago and its last value. The line that just changed gets a `▸`; `CONFIG` shows only what is off its
+default; the first stderr line stays at the bottom, in coral. `x` closes the game; when the window
+closes, the list comes back with a note on how it ended.
 
 ```text
-╭ CampCrawler · jogando há 02:14 ───────────────────────── 412 fatos ▁▂▅▇▃▂▄ ╮
+╭ campcrawler · jogando há 02:14 ───────────────────────── 412 fatos ▁▂▅▇▃▂▄ ╮
 │ TIPO         VEZES  HÁ   O ÚLTIMO                                          │
 │ PARTIDA           1 2m   semente 1 · idioma pt_BR · ritmo normal           │
 │ CONFIG           37 2m   todas no padrão                                   │
@@ -57,38 +67,57 @@ quantas vezes veio, há quanto tempo e o último valor. A linha que acabou de mu
 ╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
-## Sem tela X
+## Adding a game
 
-Os quatro lançadores forçam o X11 (`SDL_VIDEO_DRIVER=x11`). Antes de abrir, o `jogar` confere se
-há um X atendendo no `DISPLAY` deste terminal. Se não houver, o painel avisa no título e embaixo,
-e o Enter não abre nada; `jogar <jogo>` sai com 2 numa linha, em vez do stack trace do LÖVE
-("x11 not available"). Um terminal novo, ou `export DISPLAY=:0`, resolve.
+The games live in `~/lua`, or in the folder `$JOGAR_RAIZ` names. **A game is any folder there with
+an executable `tools/love`**: to add one, put the folder there; nothing changes in `jogar`. The
+list is alphabetical and shows each game by its folder name.
 
-Sob o Hyprland, o XWayland atende pelo `/tmp/.X11-unix/X0_`, e um `Xvfb -displayfd` de
-ferramenta de teste pode apagar o `X0` ao tomar o `:0`. Quando o `X0` some mas o `X0_` atende, o
-aviso diz o conserto:
+Every game follows these rules:
+
+1. **The same launcher in every game.** `tools/love` and the pieces in `tools/lancador/` are the
+   same files in every project: copy them from another game, and never edit them in just one.
+   What belongs to the project goes in `tools/love_projeto.lua`, which the comparison leaves out. A
+   fix to the launcher is copied to all games. The panel compares the copies and marks with `≠`
+   the game that differs from the majority (with no majority, every game that differs).
+2. **Opened from its folder.** `jogar` runs `tools/love .` with the game's folder as the working
+   directory, and appends whatever follows `jogar <game>`, such as
+   `--config=<project>.<key>=<value>`.
+3. **X11.** The game runs on X11 (`SDL_VIDEO_DRIVER=x11`). Before opening, `jogar` checks that an
+   X server answers on `DISPLAY` (see [No X display](#no-x-display)).
+4. **Facts on stdout, one per line.** Line-buffered stdout (`io.stdout:setvbuf("line")` at the top
+   of `conf.lua`), so each fact arrives live. A fact is
+   `<FOLDER IN UPPERCASE> <TYPE> key=value ...`, as in `GODS JANELA largura=1280 altura=720`. A
+   `CONFIG` fact carries `chave=`, `valor=` and `origem=` (`padrao` for a default). Any other line
+   is shown as text.
+5. **SIGTERM closes it.** `x` sends SIGTERM to the game's process group, which LÖVE treats as
+   closing the window, and exit code 0 reads as a normal close.
+
+The launcher is not part of this repository: each game carries its own copy.
+
+## No X display
+
+The games force X11. Before opening one, `jogar` checks for an X server answering on this
+terminal's `DISPLAY`. If there is none, the panel says so in the title and at the bottom, and Enter
+opens nothing; `jogar <game>` exits with 2 and a one-line message instead of LÖVE's stack trace
+("x11 not available"). A new terminal, or `export DISPLAY=:0`, fixes it.
+
+Under Hyprland, XWayland answers on `/tmp/.X11-unix/X0_`, and an `Xvfb -displayfd` from a test tool
+can delete `X0` when it takes `:0`. When `X0` is gone but `X0_` answers, the warning gives the fix:
 
 ```bash
 ln /tmp/.X11-unix/X0_ /tmp/.X11-unix/X0
 ```
 
-## Os jogos
+## Install
 
-| Jogo        | Lançador do projeto                      |
-|-------------|------------------------------------------|
-| BomberBoom  | `tools/love .`                           |
-| Boomlitude  | `tools/love .`                           |
-| CampCrawler | `tools/love .`                           |
-| Gods        | `tools/love .`                           |
-
-O Gods está em reescrita (Godot para LÖVE). Até a fase da mesa da batalha, ele abre só uma tela
-de prova: fundo escuro e um retângulo magenta no centro.
-
-Se um projeto mudar o lançador, ou para pôr outro jogo, mude a tabela `JOGOS` em
-[`src/jogos.rs`](src/jogos.rs) e reinstale.
-
-## Instalar
+Linux, Rust 1.88 or later, and git. Each game brings its own runtime requirements (the LÖVE build
+its launcher checks).
 
 ```bash
 cargo install --path ~/love-lua-cli
 ```
+
+## License
+
+[GPL-3.0](LICENSE).

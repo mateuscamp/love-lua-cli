@@ -34,7 +34,7 @@ pub fn pasta_de_teste(nome: &str) -> PathBuf {
     pasta
 }
 
-/// Um jogo de mentira em `raiz/pasta`, com o `tools/love` (o lançador dos quatro jogos) feito do
+/// Um jogo de mentira em `raiz/pasta`, com o `tools/love` (o lançador comum dos jogos) feito do
 /// `corpo` em sh. Ele roda na pasta do jogo, como o de verdade.
 ///
 /// Quem escreve o script é outro processo. Se fosse este, um fork de outro teste em paralelo
