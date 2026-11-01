@@ -25,6 +25,8 @@ pub struct GameEntry {
     pub repo: Option<Repo>,
     /// The copy of the shared launcher differs from the other games' (`shared_launcher`).
     pub launcher_differs: bool,
+    /// Why the game cannot be played yet, when its folder declares it (`NAO_JOGAVEL`).
+    pub unplayable: Option<String>,
 }
 
 /// The sentence from the last attempt: the game that closed, the one that did not open.
@@ -128,6 +130,9 @@ fn draw_games(frame: &mut Frame, area: Rect, view: &ListView) {
             if entry.launcher_differs {
                 parts.push(" ≠".fg(theme::CORAL));
             }
+            if entry.unplayable.is_some() {
+                parts.push(" ✕".fg(theme::CORAL));
+            }
             ListItem::new(Line::from(parts))
         })
         .collect();
@@ -161,6 +166,15 @@ fn draw_details(frame: &mut Frame, area: Rect, view: &ListView) {
         labeled("pasta", folder_spans(view.root, game)),
         labeled("lançador", launcher),
     ];
+    if let Some(reason) = &entry.unplayable {
+        lines.push(labeled(
+            "estado",
+            vec![
+                "✕ não jogável: ".fg(theme::CORAL),
+                Span::raw(reason.clone()),
+            ],
+        ));
+    }
     lines.extend(git_lines(entry.repo.as_ref(), view.now));
     let title = Span::raw(format!(" {} ", game.folder))
         .fg(theme::MAGENTA)
@@ -266,16 +280,19 @@ mod tests {
                 game: game("bomberboom"),
                 repo: Some(clean),
                 launcher_differs: false,
+                unplayable: None,
             },
             GameEntry {
                 game: game("boomlitude"),
                 repo: Some(in_progress),
                 launcher_differs: false,
+                unplayable: None,
             },
             GameEntry {
                 game: game("campcrawler"),
                 repo: None,
                 launcher_differs: true,
+                unplayable: None,
             },
         ]
     }
@@ -323,6 +340,22 @@ mod tests {
             !text.contains("difere"),
             "the chosen one does not differ: {text}"
         );
+    }
+
+    /// A game that declares itself unplayable is marked in the list and says why in the details,
+    /// even on the main branch (author, 01/11: Gods showed `main` and gave no hint).
+    #[test]
+    fn the_list_marks_the_unplayable_game_and_gives_the_reason() {
+        let mut entries = entries();
+        entries[0].unplayable = Some("só o domínio, sem telas".to_string());
+        let display_check = Ok(());
+        let mut shown = view(&entries, &display_check);
+        shown.chosen = 0;
+        let text = screen_text(80, 14, |frame| draw_list(frame, &shown));
+        for expected in ["bomberboom ✕", "✕ não jogável: só o domínio, sem telas"] {
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+        }
+        assert!(!text.contains("boomlitude ✕"), "{text}");
     }
 
     #[test]

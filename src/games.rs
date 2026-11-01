@@ -46,6 +46,22 @@ fn has_launcher(folder: &Path) -> bool {
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
+/// The file in a game's folder that declares it cannot be played yet.
+pub const UNPLAYABLE_MARKER: &str = "NAO_JOGAVEL";
+
+/// Why `game` cannot be played yet: `Some` when its folder has the `NAO_JOGAVEL` file, with the
+/// file's first non-empty line as the reason (a default sentence when it has none). The game
+/// declares it, `jogar` only shows it (author, 01/11): the game still opens.
+pub fn unplayable_reason(root: &Path, game: &Game) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(&game.folder).join(UNPLAYABLE_MARKER)).ok()?;
+    let reason = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("sem motivo declarado");
+    Some(reason.to_string())
+}
+
 /// The game in `root` whose folder is `name`, ignoring case.
 pub fn find_game(root: &Path, name: &str) -> Option<Game> {
     discover(root)
@@ -128,6 +144,34 @@ mod tests {
     /// The folders of `games`, in order, to compare at once.
     fn folders(games: &[Game]) -> Vec<&str> {
         games.iter().map(|game| game.folder.as_str()).collect()
+    }
+
+    /// A game declares it is not playable yet with a `NAO_JOGAVEL` file (author, 01/11): the first
+    /// non-empty line is the reason, an empty file gets a default one, and no file means playable.
+    #[test]
+    fn unplayable_reason_reads_the_marker_file_in_the_game_folder() {
+        let root = test_folder("unplayable");
+        for folder in ["gods", "vazio", "pronto"] {
+            fake_game(&root, folder, "exit 0\n");
+        }
+        std::fs::write(
+            root.join("gods/NAO_JOGAVEL"),
+            "\n  só o domínio, sem telas \nF3\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("vazio/NAO_JOGAVEL"), "").unwrap();
+        let game = |folder: &str| Game {
+            folder: folder.to_string(),
+        };
+        assert_eq!(
+            unplayable_reason(&root, &game("gods")),
+            Some("só o domínio, sem telas".to_string())
+        );
+        assert_eq!(
+            unplayable_reason(&root, &game("vazio")),
+            Some("sem motivo declarado".to_string())
+        );
+        assert_eq!(unplayable_reason(&root, &game("pronto")), None);
     }
 
     /// A game is the folder with an executable `tools/love` (author, 31/10). Left out: the folder

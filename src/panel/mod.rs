@@ -257,10 +257,12 @@ impl GameList {
 
 fn game_entry(root: &Path, game: Game, launcher_differs: bool) -> GameEntry {
     let repo = git_state::read_repo(&root.join(&game.folder));
+    let unplayable = games::unplayable_reason(root, &game);
     GameEntry {
         game,
         repo,
         launcher_differs,
+        unplayable,
     }
 }
 

@@ -56,6 +56,12 @@ fn open_directly(root: &Path, name: &str, extra_args: &[String]) -> ExitCode {
         eprintln!("jogar: {} não abre: {warning}", game.folder);
         return ExitCode::from(2);
     }
+    if let Some(reason) = games::unplayable_reason(root, &game) {
+        eprintln!(
+            "jogar: aviso: {} ainda não é jogável: {reason}",
+            game.folder
+        );
+    }
     match games::run_attached(root, &game, extra_args) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {

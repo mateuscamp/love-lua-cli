@@ -33,6 +33,8 @@ ignoraria este arquivo).
   sessão).
 - Produto (autor, 28/10): painel em tela cheia; estado ao vivo durante o jogo; obra se mostra, não
   se impede; aviso do X0 com o `ln`. Cores anil e magenta, em 24 bits (autor, 30/10).
+- `NAO_JOGAVEL` na pasta do jogo (autor, 01/11): o jogo declara que ainda não se joga (motivo na 1ª
+  linha); o painel marca `✕` e mostra, mas abre. `● em obra` é só git (branch fora do main).
 - Portfólio (autor, 31/10): repositório público, GPL-3.0; README em inglês com resumo em português.
   Código e comentários em inglês; o texto da tela segue em português (autor, 31/10). `≠` marca o
   lançador que destoa da maioria; só avisa.

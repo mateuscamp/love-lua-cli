@@ -92,6 +92,10 @@ Every game follows these rules:
    is shown as text.
 5. **SIGTERM closes it.** `x` sends SIGTERM to the game's process group, which LÖVE treats as
    closing the window, and exit code 0 reads as a normal close.
+6. **Not playable yet? Say so (optional).** A `NAO_JOGAVEL` file in the game's folder marks it
+   `✕` in the list and shows `✕ não jogável: <reason>` in the details; the reason is the file's first
+   non-empty line. `jogar <game>` prints it as a warning. The game still opens: the panel shows,
+   it does not forbid. The branch's `● em obra` is a different signal, only about git.
 
 The launcher is not part of this repository: each game carries its own copy.
 
